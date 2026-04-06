@@ -1,76 +1,107 @@
 # Napstarr
 
-> Federated social music discovery for self-hosted libraries. Napster meets the *arr ecosystem.
+> Self-hosted music platform. One binary. No dependencies. Your library, your rules.
 
-## The Problem
+Napstarr scans your music directory, builds a library, and serves a sleek web UI with full audio playback. Everything is embedded in a single Go binary — no external database, no Node.js, no build toolchain.
 
-Spotify is getting worse — price hikes, disappearing albums, algorithmic slop, podcast spam. Self-hosted music (Lidarr + Plex/Jellyfin) solves the library problem, but it's isolated. You can't see what your friends are listening to, share playlists that actually play, or discover music through people you trust instead of algorithms.
+## Features
 
-## The Idea
+- **Single binary** — everything embedded: web UI, database engine, audio streamer
+- **Music scanner** — reads FLAC, MP3, M4A, OGG/Opus tags automatically
+- **Web player** — album art grid, queue management, keyboard shortcuts
+- **Audio streaming** — range request support for instant seeking
+- **Full-text search** — FTS5-powered search across artists, albums, and tracks
+- **Dark theme** — clean, modern UI that looks good at 2am
+- **Federation-ready** — UUIDv7 keys, instance IDs, MusicBrainz IDs in the schema
+- **Docker-ready** — ~30MB alpine image
 
-Napstarr is a **social layer on top of self-hosted music libraries**. It's not a file sharing tool — debrid already solved that. It's the thing that made Napster actually great: discovering music through real people.
+## Quick Start
 
-## Core Features
+### Binary
 
-- **Federated** — each instance runs on someone's server alongside their *arr stack
-- **Follow friends** — see their listening activity, shared playlists, what they're adding to their library
-- **One-click grabs** — when a friend shares a track you don't have, one click adds it to your Lidarr wanted list
-- **Listening rooms** — synchronized playback across instances
-- **No central server** — your data stays on your hardware
+```bash
+go build -o napstarr .
+./napstarr \
+  --music-dir /path/to/music \
+  --data-dir ./data \
+  --admin-pass yourpassword
+```
 
-## Architecture: ISP-Safe by Design
+Open `http://localhost:8484`, log in, and hit **Scan Library**.
 
-The critical design principle: **never transfer actual content between peers.**
+### Docker
 
-### What flows between Napstarr instances (metadata only):
-- "User X has Album Y" — just a database entry
-- Playlist data — track IDs, order, metadata
-- Listening activity — what's playing, timestamps
-- Social — follows, likes, comments
+```bash
+docker build -t napstarr .
+docker run -d \
+  -p 8484:8484 \
+  -v /path/to/music:/music:ro \
+  -v napstarr-data:/data \
+  -e NAPSTARR_ADMIN_PASS=yourpassword \
+  napstarr
+```
 
-### What DOESN'T flow between instances:
-- Audio files
-- Torrent traffic
-- Any copyrighted content
+### Docker Compose
 
-### How content acquisition works:
-1. You see a friend is listening to an album you don't have
-2. You click "Add to Library"
-3. Napstarr tells your Lidarr instance to search for it
-4. Lidarr grabs it through your existing debrid pipeline (altmount/nzbdav/decypharr)
-5. Debrid CDN delivers it over HTTPS — indistinguishable from any streaming traffic
+```yaml
+services:
+  napstarr:
+    build: .
+    container_name: napstarr
+    ports:
+      - "8484:8484"
+    volumes:
+      - ./data:/data
+      - /path/to/music:/music:ro
+    environment:
+      - NAPSTARR_MUSIC_DIR=/music
+      - NAPSTARR_DATA_DIR=/data
+      - NAPSTARR_ADMIN_PASS=changeme
+    restart: unless-stopped
+```
 
-**ISP sees:** encrypted HTTPS to debrid CDN + encrypted WebSocket between Napstarr instances (just metadata). No P2P, no torrent protocol, no file transfers between residential IPs.
+## Configuration
 
-## Tech Stack (Proposed)
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--music-dir` | `NAPSTARR_MUSIC_DIR` | `/music` | Path to music library |
+| `--data-dir` | `NAPSTARR_DATA_DIR` | `/data` | Path for database + artwork cache |
+| `--listen` | `NAPSTARR_LISTEN` | `:8484` | Listen address |
+| `--admin-user` | `NAPSTARR_ADMIN_USER` | `admin` | Admin username |
+| `--admin-pass` | `NAPSTARR_ADMIN_PASS` | *(generated)* | Admin password |
 
-| Layer | Tech | Purpose |
-|-------|------|---------|
-| **Backend** | Go or Python | Federation protocol, API, WebSocket server |
-| **Frontend** | React or Svelte | Web UI, music player, social feed |
-| **Federation** | ActivityPub or custom | Instance-to-instance communication |
-| **Database** | SQLite or Postgres | Library metadata, social graph |
-| **Integration** | Lidarr API, Subsonic API | Library management, audio streaming |
-| **Audio** | Subsonic/Navidrome API | Actual playback from user's own server |
-| **Transport** | WebSocket over TLS | Real-time sync, listening rooms |
+## Tech Stack
 
-## Integration Points
+| Component | Technology |
+|-----------|-----------|
+| Backend | Go 1.23 (stdlib `net/http`) |
+| Database | SQLite via [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO) |
+| Audio tags | [dhowden/tag](https://github.com/dhowden/tag) |
+| Frontend | Vanilla JS + CSS (no framework, no build step) |
+| Auth | Session-based with bcrypt |
 
-- **Lidarr** — search & grab missing music on demand
-- **Plex/Jellyfin/Navidrome** — audio playback (Subsonic API is the common protocol)
-- **MusicBrainz** — canonical track/album/artist identification
-- **Last.fm/ListenBrainz** — optional scrobbling, existing social music data
+## Keyboard Shortcuts
 
-## Inspiration
+| Key | Action |
+|-----|--------|
+| `Space` | Play / Pause |
+| `→` | Seek forward 10s |
+| `←` | Seek back 10s |
+| `↑` | Volume up |
+| `↓` | Volume down |
 
-- **Napster** — social music discovery (the soul, not the piracy)
-- **Mastodon/ActivityPub** — federated social networking
-- **Lidarr/*arr** — self-hosted media management
-- **Spotify** — what it used to be before it got bad
+## Roadmap
 
-## Status
+- [ ] **v0.2** — Federation: connect instances, browse friends' libraries
+- [ ] **v0.3** — Social feed: see what friends are listening to
+- [ ] **v0.4** — One-click grabs: add music from friends' libraries to your own
+- [ ] **v0.5** — Listening rooms: synchronized playback across instances
 
-Idea phase. This README is the spec.
+## Philosophy
+
+Napstarr exists because music is social but self-hosting is isolated. Spotify is getting worse. The *arr ecosystem solved media acquisition but not music discovery. Napster's magic wasn't piracy — it was browsing a stranger's collection and finding something you'd never heard of.
+
+This is the foundation.
 
 ---
 

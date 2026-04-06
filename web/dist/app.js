@@ -218,21 +218,27 @@ async function HomeView() {
         </div>
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-value">${stats?.artists ?? 0}</div>
+                <div class="stat-value">${stats?.artistCount ?? 0}</div>
                 <div class="stat-label">Artists</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${stats?.albums ?? 0}</div>
+                <div class="stat-value">${stats?.albumCount ?? 0}</div>
                 <div class="stat-label">Albums</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${stats?.tracks ?? 0}</div>
+                <div class="stat-value">${stats?.trackCount ?? 0}</div>
                 <div class="stat-label">Tracks</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">${stats?.totalDuration ? formatDurationHours(stats.totalDuration) : '0h'}</div>
-                <div class="stat-label">Total Time</div>
+                <div class="stat-value">${stats?.totalSizeMb ? (stats.totalSizeMb / 1024).toFixed(1) + ' GB' : '0 GB'}</div>
+                <div class="stat-label">Library Size</div>
             </div>
+        </div>
+        <div style="margin-bottom:24px">
+            <button class="btn-play-all" data-action="scan-library" style="display:inline-flex">
+                <svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                Scan Library
+            </button>
         </div>
         ${albums.length > 0 ? `
             <h2 class="section-title">Recently Added</h2>
@@ -670,6 +676,12 @@ document.addEventListener('click', (e) => {
         if (state.currentAlbum && state.currentAlbum.tracks) {
             playAlbum(state.currentAlbum.tracks, 0);
         }
+    } else if (action === 'scan-library') {
+        api('/library/scan', { method: 'POST' }).then(() => {
+            target.textContent = 'Scanning...';
+            target.disabled = true;
+            setTimeout(() => { render(); }, 10000);
+        }).catch(() => {});
     } else if (action === 'play-single') {
         const trackId = target.dataset.trackId;
         api('/tracks/' + trackId).then(track => {
