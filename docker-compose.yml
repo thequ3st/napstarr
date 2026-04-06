@@ -1,0 +1,15 @@
+services:
+  napstarr:
+    build: .
+    container_name: napstarr
+    ports:
+      - "8484:8484"
+    volumes:
+      - ./data:/data
+      - /path/to/music:/music:ro
+    environment:
+      - NAPSTARR_MUSIC_DIR=/music
+      - NAPSTARR_DATA_DIR=/data
+      - NAPSTARR_ADMIN_USER=admin
+      - NAPSTARR_ADMIN_PASS=changeme
+    restart: unless-stopped
