@@ -180,53 +180,70 @@ ISP does NOT see:
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| Identity | `crypto/ed25519` | Stdlib, fast, small keys |
-| Discovery | `github.com/anacrolix/dht` | Pure Go, production BitTorrent DHT |
-| Gossip | Custom over `github.com/coder/websocket` | Lightweight, TLS-native |
-| Transfers | `github.com/pion/webrtc` | Pure Go WebRTC, no CGO |
+| **Networking** | `github.com/libp2p/go-libp2p` | **The stack.** DHT, NAT traversal, encryption, peer discovery, file transfer — all in one. Used by IPFS, Ethereum, Filecoin. Millions of nodes. Blocking libp2p means blocking half of Web3. |
+| Identity | libp2p peer IDs (Ed25519) | Native to libp2p, same crypto we planned |
+| Discovery | libp2p Kademlia DHT | Production-grade, replaces custom DHT |
+| NAT traversal | libp2p AutoRelay + hole-punching | Handles STUN/TURN/relay automatically |
+| Transport | QUIC + WebRTC + WebTransport | Multiple transports, ISP sees standard traffic |
+| Encryption | Noise protocol (via libp2p) | Same as Signal/WireGuard, no TLS fingerprint for DPI |
+| File transfer | libp2p streams | Multiplexed, encrypted, over any transport |
+| Gossip | libp2p GossipSub | Built-in pub/sub for activity feeds and library updates |
 | Content hashing | `crypto/sha256` | Stdlib, universal |
-| Anonymity | `golang.org/x/net/proxy` + Tor SOCKS | Optional, standard integration |
+| Anonymity | Tor SOCKS proxy (optional) | Route libp2p through Tor |
 | Everything else | Same as v0.1 | SQLite, tag reader, embedded UI |
+
+### Why libp2p over custom WebRTC + DHT + gossip
+
+We were going to build three separate systems (Phases C, D, E). libp2p IS all three in one battle-tested package:
+- **Phase C (P2P transfer)** → libp2p streams over QUIC/WebRTC
+- **Phase D (DHT discovery)** → libp2p Kademlia DHT
+- **Phase E (gossip)** → libp2p GossipSub pub/sub
+- **NAT traversal** → libp2p AutoRelay + hole-punching (free)
+- **Encryption** → Noise protocol (harder to fingerprint than TLS)
+- **Multi-transport** → QUIC, WebRTC, WebTransport, TCP — automatically picks the best one
+
+The protocol is already running on millions of nodes. Trying to block it means blocking IPFS, Ethereum, Filecoin. That's our camouflage.
 
 ## Implementation Phases
 
-### Phase A: Instance Identity
-- Generate Ed25519 keypair on first run, persist in data dir
+### Phase A: Instance Identity ✅ DONE
+- Ed25519 keypair generated on first run, persisted to identity.json
 - Instance ID = base58(SHA-256(pubkey))
 - API: GET /api/instance — returns pubkey, ID, name, stats
-- Sign all outbound messages with private key
+- Signed messages with replay protection
 
-### Phase B: Direct Federation (Simple)
-- Follow by URL first (before DHT)
-- Persistent WebSocket between instances
-- Exchange library indexes (signed metadata)
-- Store remote library with instance_id in existing schema
-- UI: browse remote libraries
+### Phase B: Direct Federation ✅ DONE
+- Follow by URL (POST /api/peers {address})
+- Library export/import between instances
+- Remote library stored in remote_artists/albums/tracks tables
+- Browse peer libraries via API
 
-### Phase C: P2P Transfer (WebRTC)
-- Signaling via federation WebSocket
-- WebRTC data channel for file transfer
-- Content-hash verification
-- "Add to Library" button on remote tracks
+### Phase C: libp2p Integration ← NEXT
+- Replace URL-based federation with libp2p host
+- Generate libp2p peer ID from existing Ed25519 key
+- Join the libp2p Kademlia DHT on startup
+- Announce instance on DHT — discoverable without fixed URLs
+- Connect to peers via libp2p (auto NAT traversal, hole-punching)
+- Multiple transports: QUIC (default), WebRTC, WebTransport
+
+### Phase D: P2P File Transfer
+- libp2p stream protocol for file transfer (/napstarr/transfer/1.0.0)
+- Content-hash based requests ("send me SHA-256 abc123")
+- Chunked transfer with progress reporting
+- Verify integrity on receive, add to local library
+- "Add to Library" button on remote tracks in UI
 - Transfer progress UI
 
-### Phase D: DHT Discovery
-- Replace URL-based following with DHT lookup
-- Announce instance on DHT at startup
-- Find peers by instance ID without knowing their URL
-- Bootstrap from hardcoded seed nodes (any Napstarr instance can be a seed)
-
-### Phase E: Gossip Protocol
-- Replace direct WebSocket federation with gossip
-- Library updates propagate through network
-- Activity feed propagates through network
-- Peer discovery propagates through network
-- Network self-heals when nodes go down
+### Phase E: GossipSub
+- libp2p GossipSub for decentralized pub/sub
+- Topics: library-updates, now-playing, peer-discovery
+- Library changes propagate across network automatically
+- Activity feed aggregated from subscribed topics
+- Network self-heals — no direct dependency on any single peer
 
 ### Phase F: Tor Integration (Optional)
+- Route libp2p through Tor SOCKS proxy
 - Run as Tor hidden service
-- Route federation through Tor
-- Fallback transfers through Tor circuits
 - Config flag: --tor / NAPSTARR_TOR=true
 
 ## What Makes This Unkillable
