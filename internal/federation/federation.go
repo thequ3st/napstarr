@@ -254,10 +254,15 @@ func (n *Node) SyncPeerLibrary(peer *PeerInfo) error {
 				len(album.Tracks), album.HasArtwork)
 
 			for _, track := range album.Tracks {
+				// Use the original remote track ID so we can reference it for streaming
+				remoteTrackID := track.ID
+				if remoteTrackID == "" {
+					remoteTrackID = database.NewID()
+				}
 				tx.Exec(`INSERT INTO remote_tracks (id, peer_id, album_id, artist_name, album_title, title,
 					track_number, disc_number, duration_ms, format, content_hash, file_size)
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					database.NewID(), peer.ID, albumID, artist.Name, album.Title,
+					remoteTrackID, peer.ID, albumID, artist.Name, album.Title,
 					track.Title, track.TrackNumber, track.DiscNumber, track.DurationMs,
 					track.Format, track.ContentHash, track.FileSize)
 				trackCount++

@@ -35,6 +35,7 @@ type SignedMessage struct {
 	Timestamp  int64           `json:"timestamp"`
 	Type       string          `json:"type"`
 	Payload    json.RawMessage `json:"payload"`
+	PublicKey  string          `json:"publicKey"` // hex-encoded, for self-verification
 	Signature  string          `json:"signature"` // hex-encoded Ed25519 signature
 }
 
@@ -159,6 +160,7 @@ func (inst *Instance) Sign(msgType string, payload any) (*SignedMessage, error) 
 		Timestamp:  time.Now().UnixMilli(),
 		Type:       msgType,
 		Payload:    payloadBytes,
+		PublicKey:  hex.EncodeToString(inst.PublicKey),
 	}
 
 	// Sign the deterministic representation: instanceId + timestamp + type + payload

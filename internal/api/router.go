@@ -52,8 +52,9 @@ func NewRouter(db *database.DB, cfg *config.Config, hub *ws.Hub, inst *identity.
 	// Instance identity (public — other instances need this to connect)
 	mux.HandleFunc("GET /api/instance", handleInstance(inst, db))
 
-	// Federation: public endpoint for peers to fetch our library
+	// Federation: public endpoints for peers
 	mux.HandleFunc("GET /api/federation/library", handleFederationLibrary(cfg))
+	mux.HandleFunc("GET /api/federation/stream/{id}", handleFederationStream(db, cfg))
 
 	// Federation: manage peers (auth required)
 	mux.HandleFunc("GET /api/peers", AuthRequired(handleGetPeers(cfg), db))
@@ -64,6 +65,12 @@ func NewRouter(db *database.DB, cfg *config.Config, hub *ws.Hub, inst *identity.
 	// Remote library browsing (auth required)
 	mux.HandleFunc("GET /api/peers/{id}/artists", AuthRequired(handleRemoteArtists(db), db))
 	mux.HandleFunc("GET /api/peers/{id}/albums", AuthRequired(handleRemoteAlbums(db), db))
+
+	// Remote streaming — play a track from a peer without downloading
+	mux.HandleFunc("GET /api/stream/remote/{peerId}/{trackId}", AuthRequired(handleRemoteStream(db, cfg), db))
+
+	// Transfer — download a track from a peer permanently
+	mux.HandleFunc("POST /api/transfer", AuthRequired(AdminRequired(handleTransferRequest(db, cfg)), db))
 
 	// WebSocket
 	mux.HandleFunc("GET /api/ws", AuthRequired(handleWebSocket(hub), db))

@@ -66,8 +66,9 @@ func main() {
 	defer p2pHost.Close()
 	cfg.P2PHost = p2pHost
 
-	// Start transfer service
+	// Start transfer and stream services
 	_ = p2p.NewTransferService(p2pHost, db, cfg.MusicDir, cfg.DataDir)
+	_ = p2p.NewStreamService(p2pHost, db)
 
 	// Start gossip service
 	gossip := p2p.NewGossipService(p2pHost, inst.ID)
