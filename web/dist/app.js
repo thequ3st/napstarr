@@ -772,7 +772,9 @@
     } else {
       audio.src = '/api/stream/' + track.id;
     }
-    audio.play().catch(() => {});
+    audio.play().catch(err => {
+      console.warn('Play failed:', err);
+    });
 
     // Update player UI
     document.getElementById('player-title').textContent = track.title || 'Unknown';
@@ -883,6 +885,20 @@
   audio.addEventListener('ended', () => {
     recordListen();
     nextTrack();
+  });
+
+  // Handle stream errors — track file not accessible, skip to next
+  audio.addEventListener('error', () => {
+    console.warn('Stream error for track:', state.currentTrack?.title);
+    // Show brief error indicator
+    const titleEl = document.getElementById('player-title');
+    if (titleEl && state.currentTrack) {
+      titleEl.textContent = state.currentTrack.title + ' (unavailable)';
+      titleEl.style.color = '#ef4444';
+      setTimeout(() => { titleEl.style.color = ''; }, 2000);
+    }
+    // Auto-skip to next track after a brief delay
+    setTimeout(() => nextTrack(), 1500);
   });
 
   // ---- Global Click Delegation ----
