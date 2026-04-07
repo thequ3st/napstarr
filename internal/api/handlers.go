@@ -12,6 +12,7 @@ import (
 	"github.com/thequ3st/napstarr/internal/auth"
 	"github.com/thequ3st/napstarr/internal/config"
 	"github.com/thequ3st/napstarr/internal/database"
+	"github.com/thequ3st/napstarr/internal/identity"
 	"github.com/thequ3st/napstarr/internal/library"
 	"github.com/thequ3st/napstarr/internal/scanner"
 	"github.com/thequ3st/napstarr/internal/streaming"
@@ -331,6 +332,25 @@ func handleGetHistory(db *database.DB) http.HandlerFunc {
 func handleWebSocket(hub *ws.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWebSocket(w, r)
+	}
+}
+
+func handleInstance(inst *identity.Instance, db *database.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		info := inst.Info()
+
+		// Add library stats
+		stats, _ := library.GetStats(db)
+
+		JSON(w, http.StatusOK, map[string]any{
+			"id":        info.ID,
+			"name":      info.Name,
+			"publicKey": info.PublicKey,
+			"createdAt": info.CreatedAt,
+			"stats":     stats,
+			"version":   "0.1.0",
+			"protocol":  "napstarr/1",
+		})
 	}
 }
 

@@ -78,6 +78,72 @@ var migrations = []string{
 		content='',
 		tokenize='unicode61'
 	)`,
+
+	// Federation: peers we follow
+	`CREATE TABLE IF NOT EXISTS peers (
+		id            TEXT PRIMARY KEY,
+		instance_id   TEXT NOT NULL UNIQUE,
+		name          TEXT NOT NULL DEFAULT '',
+		public_key    TEXT NOT NULL,
+		address       TEXT NOT NULL DEFAULT '',
+		last_seen     TEXT,
+		last_synced   TEXT,
+		status        TEXT NOT NULL DEFAULT 'active',
+		created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_peers_instance ON peers(instance_id)`,
+
+	// Remote library: artists/albums/tracks from peers
+	`CREATE TABLE IF NOT EXISTS remote_artists (
+		id            TEXT PRIMARY KEY,
+		peer_id       TEXT NOT NULL REFERENCES peers(id),
+		name          TEXT NOT NULL,
+		sort_name     TEXT NOT NULL,
+		album_count   INTEGER NOT NULL DEFAULT 0,
+		track_count   INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_remote_artists_peer ON remote_artists(peer_id)`,
+
+	`CREATE TABLE IF NOT EXISTS remote_albums (
+		id            TEXT PRIMARY KEY,
+		peer_id       TEXT NOT NULL REFERENCES peers(id),
+		artist_id     TEXT NOT NULL REFERENCES remote_artists(id),
+		artist_name   TEXT NOT NULL DEFAULT '',
+		title         TEXT NOT NULL,
+		year          INTEGER,
+		track_count   INTEGER NOT NULL DEFAULT 0,
+		content_hash  TEXT,
+		has_artwork   INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_remote_albums_peer ON remote_albums(peer_id)`,
+
+	`CREATE TABLE IF NOT EXISTS remote_tracks (
+		id            TEXT PRIMARY KEY,
+		peer_id       TEXT NOT NULL REFERENCES peers(id),
+		album_id      TEXT NOT NULL REFERENCES remote_albums(id),
+		artist_name   TEXT NOT NULL DEFAULT '',
+		album_title   TEXT NOT NULL DEFAULT '',
+		title         TEXT NOT NULL,
+		track_number  INTEGER,
+		disc_number   INTEGER NOT NULL DEFAULT 1,
+		duration_ms   INTEGER NOT NULL DEFAULT 0,
+		format        TEXT NOT NULL DEFAULT '',
+		content_hash  TEXT NOT NULL,
+		file_size     INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_remote_tracks_peer ON remote_tracks(peer_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_remote_tracks_album ON remote_tracks(album_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_remote_tracks_hash ON remote_tracks(content_hash)`,
+
+	// Activity feed from peers
+	`CREATE TABLE IF NOT EXISTS peer_activity (
+		id            TEXT PRIMARY KEY,
+		peer_id       TEXT NOT NULL REFERENCES peers(id),
+		type          TEXT NOT NULL,
+		data          TEXT NOT NULL DEFAULT '{}',
+		created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_peer_activity_time ON peer_activity(created_at DESC)`,
 }
 
 func (db *DB) migrate() error {

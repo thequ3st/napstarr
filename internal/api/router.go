@@ -7,12 +7,13 @@ import (
 
 	"github.com/thequ3st/napstarr/internal/config"
 	"github.com/thequ3st/napstarr/internal/database"
+	"github.com/thequ3st/napstarr/internal/identity"
 	"github.com/thequ3st/napstarr/internal/ws"
 	"github.com/thequ3st/napstarr/web"
 )
 
 // NewRouter creates the HTTP handler with all routes wired up.
-func NewRouter(db *database.DB, cfg *config.Config, hub *ws.Hub) http.Handler {
+func NewRouter(db *database.DB, cfg *config.Config, hub *ws.Hub, inst *identity.Instance) http.Handler {
 	mux := http.NewServeMux()
 
 	// Auth routes
@@ -47,6 +48,22 @@ func NewRouter(db *database.DB, cfg *config.Config, hub *ws.Hub) http.Handler {
 	// Listen history
 	mux.HandleFunc("POST /api/history", AuthRequired(handleRecordListen(db), db))
 	mux.HandleFunc("GET /api/history", AuthRequired(handleGetHistory(db), db))
+
+	// Instance identity (public — other instances need this to connect)
+	mux.HandleFunc("GET /api/instance", handleInstance(inst, db))
+
+	// Federation: public endpoint for peers to fetch our library
+	mux.HandleFunc("GET /api/federation/library", handleFederationLibrary(cfg))
+
+	// Federation: manage peers (auth required)
+	mux.HandleFunc("GET /api/peers", AuthRequired(handleGetPeers(cfg), db))
+	mux.HandleFunc("POST /api/peers", AuthRequired(AdminRequired(handleFollowPeer(cfg)), db))
+	mux.HandleFunc("DELETE /api/peers/{id}", AuthRequired(AdminRequired(handleUnfollowPeer(cfg)), db))
+	mux.HandleFunc("POST /api/peers/{id}/sync", AuthRequired(AdminRequired(handleSyncPeer(cfg)), db))
+
+	// Remote library browsing (auth required)
+	mux.HandleFunc("GET /api/peers/{id}/artists", AuthRequired(handleRemoteArtists(db), db))
+	mux.HandleFunc("GET /api/peers/{id}/albums", AuthRequired(handleRemoteAlbums(db), db))
 
 	// WebSocket
 	mux.HandleFunc("GET /api/ws", AuthRequired(handleWebSocket(hub), db))

@@ -13,6 +13,8 @@ import (
 	"github.com/thequ3st/napstarr/internal/auth"
 	"github.com/thequ3st/napstarr/internal/config"
 	"github.com/thequ3st/napstarr/internal/database"
+	"github.com/thequ3st/napstarr/internal/federation"
+	"github.com/thequ3st/napstarr/internal/identity"
 	"github.com/thequ3st/napstarr/internal/ws"
 )
 
@@ -24,6 +26,14 @@ func main() {
 	log.Printf("  Data dir:  %s", cfg.DataDir)
 	log.Printf("  Listen:    %s", cfg.ListenAddr)
 
+	// Load or generate instance identity
+	inst, err := identity.LoadOrCreate(cfg.DataDir, cfg.InstanceName)
+	if err != nil {
+		log.Fatalf("Failed to initialize identity: %v", err)
+	}
+	log.Printf("  Instance:  %s (%s)", inst.ID, inst.Name)
+	log.Printf("  Public key: %x", inst.PublicKey[:8])
+
 	db, err := database.Open(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
@@ -34,10 +44,14 @@ func main() {
 		log.Fatalf("Failed to ensure admin user: %v", err)
 	}
 
+	// Initialize federation node
+	node := federation.NewNode(inst, db)
+	cfg.Federation = node
+
 	hub := ws.NewHub()
 	go hub.Run()
 
-	router := api.NewRouter(db, cfg, hub)
+	router := api.NewRouter(db, cfg, hub, inst)
 
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr,
