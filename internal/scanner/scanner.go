@@ -24,20 +24,17 @@ var audioExts = map[string]string{
 // extracts artwork, and removes DB entries for files that no longer exist.
 func Scan(db *database.DB, musicDir string, artworkDir string, progress func(int, int)) error {
 	// Phase 1: collect all audio file paths.
+	// Custom walk that follows symlinks (critical for FUSE/debrid mount setups
+	// where directories are often symlinked).
 	var files []string
-	err := filepath.WalkDir(musicDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable dirs
-		}
-		if d.IsDir() {
-			return nil
-		}
+	fmt.Fprintf(os.Stderr, "scanner: walking %s\n", musicDir)
+	err := walkFollowSymlinks(musicDir, func(path string) {
 		ext := strings.ToLower(filepath.Ext(path))
 		if _, ok := audioExts[ext]; ok {
 			files = append(files, path)
 		}
-		return nil
 	})
+	fmt.Fprintf(os.Stderr, "scanner: walk complete, found %d files\n", len(files))
 	if err != nil {
 		return fmt.Errorf("walk: %w", err)
 	}
@@ -362,6 +359,53 @@ func upsertTrack(tx *sql.Tx, albumID, artistID, title string, trackNum *int, dis
 		id, albumID, artistID, title, trackNum, discNum, filePath, fileSize, format,
 	)
 	return err
+}
+
+// walkFollowSymlinks walks a directory tree, following symlinks into directories.
+func walkFollowSymlinks(root string, fn func(path string)) error {
+	return walkDir(root, fn, 0)
+}
+
+func walkDir(dir string, fn func(string), depth int) error {
+	if depth > 20 {
+		return nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "scanner: walkDir ReadDir error %s: %v\n", dir, err)
+		return nil
+	}
+
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+
+		info, err := os.Stat(path)
+		if err != nil {
+			// Stat failed — for FUSE mounts, the file might exist but not be stattable.
+			// If the entry looks like an audio file, add it anyway.
+			ext := strings.ToLower(filepath.Ext(entry.Name()))
+			if _, ok := audioExts[ext]; ok {
+				fn(path)
+			} else if entry.Type()&os.ModeSymlink != 0 {
+				// It's a symlink to something we can't stat — try ReadDir on it
+				// in case it's a directory symlink pointing into FUSE
+				subEntries, subErr := os.ReadDir(path)
+				if subErr == nil && len(subEntries) > 0 {
+					walkDir(path, fn, depth+1)
+				}
+			}
+			continue
+		}
+
+		if info.IsDir() {
+			walkDir(path, fn, depth+1)
+		} else {
+			fn(path)
+		}
+	}
+
+	return nil
 }
 
 func cleanupMissing(db *database.DB, seenPaths map[string]bool) error {
