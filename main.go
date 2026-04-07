@@ -9,12 +9,15 @@ import (
 	"syscall"
 	"time"
 
+	"strings"
+
 	"github.com/thequ3st/napstarr/internal/api"
 	"github.com/thequ3st/napstarr/internal/auth"
 	"github.com/thequ3st/napstarr/internal/config"
 	"github.com/thequ3st/napstarr/internal/database"
 	"github.com/thequ3st/napstarr/internal/federation"
 	"github.com/thequ3st/napstarr/internal/identity"
+	"github.com/thequ3st/napstarr/internal/p2p"
 	"github.com/thequ3st/napstarr/internal/ws"
 )
 
@@ -47,6 +50,30 @@ func main() {
 	// Initialize federation node
 	node := federation.NewNode(inst, db)
 	cfg.Federation = node
+
+	// Start libp2p host
+	var bootstrapPeers []string
+	if cfg.P2PBootstrap != "" {
+		bootstrapPeers = strings.Split(cfg.P2PBootstrap, ",")
+	}
+	p2pHost, err := p2p.NewHost(inst, p2p.Config{
+		ListenPort: cfg.P2PPort,
+		Bootstrap:  bootstrapPeers,
+	})
+	if err != nil {
+		log.Fatalf("Failed to start P2P host: %v", err)
+	}
+	defer p2pHost.Close()
+	cfg.P2PHost = p2pHost
+
+	// Start transfer service
+	_ = p2p.NewTransferService(p2pHost, db, cfg.MusicDir, cfg.DataDir)
+
+	// Start gossip service
+	gossip := p2p.NewGossipService(p2pHost, inst.ID)
+	gossip.SetMessageHandler(func(msg p2p.GossipMessage) {
+		log.Printf("gossip: received %s from %s", msg.Type, msg.InstanceID)
+	})
 
 	hub := ws.NewHub()
 	go hub.Run()
