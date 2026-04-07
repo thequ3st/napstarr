@@ -82,8 +82,11 @@ input {
 
 /* ---- Layout ---- */
 #app {
-    display: flex;
     height: calc(100vh - var(--player-height));
+}
+
+#app.app-layout {
+    display: flex;
 }
 
 .sidebar {

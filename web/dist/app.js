@@ -72,6 +72,7 @@ async function render() {
     const app = document.getElementById('app');
 
     if (route === '/login') {
+        app.className = '';
         app.innerHTML = LoginView();
         bindLoginEvents();
         return;
@@ -82,28 +83,35 @@ async function render() {
             state.stats = await api('/library/stats');
             state.user = { authenticated: true };
         } catch {
-            navigate('/login');
+            if (route !== '/login') navigate('/login');
             return;
         }
     }
 
+    app.className = 'app-layout';
+
     let content = '';
     let params;
 
-    if (route === '/') {
-        content = await HomeView();
-    } else if (route === '/artists') {
-        content = await ArtistsView();
-    } else if ((params = matchRoute('/artists/{id}', route))) {
-        content = await ArtistView(params.id);
-    } else if (route === '/albums') {
-        content = await AlbumsView();
-    } else if ((params = matchRoute('/albums/{id}', route))) {
-        content = await AlbumView(params.id);
-    } else if (route === '/search') {
-        content = await SearchView();
-    } else {
-        content = '<div class="main-content"><div class="empty-state"><h3>Page Not Found</h3></div></div>';
+    try {
+        if (route === '/') {
+            content = await HomeView();
+        } else if (route === '/artists') {
+            content = await ArtistsView();
+        } else if ((params = matchRoute('/artists/{id}', route))) {
+            content = await ArtistView(params.id);
+        } else if (route === '/albums') {
+            content = await AlbumsView();
+        } else if ((params = matchRoute('/albums/{id}', route))) {
+            content = await AlbumView(params.id);
+        } else if (route === '/search') {
+            content = await SearchView();
+        } else {
+            content = '<div class="main-content"><div class="empty-state"><h3>Page Not Found</h3></div></div>';
+        }
+    } catch (err) {
+        console.error('View render error:', err);
+        content = `<div class="main-content"><div class="empty-state"><h3>Something went wrong</h3><p>${err.message}</p></div></div>`;
     }
 
     app.innerHTML = Sidebar() + content;
@@ -184,15 +192,16 @@ function bindLoginEvents() {
         const errEl = document.getElementById('login-error');
         errEl.classList.remove('show');
         try {
-            const user = await api('/auth/login', {
+            await api('/auth/login', {
                 method: 'POST',
                 body: JSON.stringify({
                     username: document.getElementById('username').value,
                     password: document.getElementById('password').value,
                 }),
             });
-            state.user = user;
-            navigate('/');
+            state.user = { authenticated: true };
+            window.location.hash = '#/';
+            await render();
         } catch (err) {
             errEl.textContent = err.message === 'unauthorized' ? 'Invalid credentials' : err.message;
             errEl.classList.add('show');
@@ -204,10 +213,12 @@ async function HomeView() {
     let albums = [];
     let stats = state.stats;
     try {
-        [albums, stats] = await Promise.all([
+        const [rawAlbums, rawStats] = await Promise.all([
             api('/albums?recent=true'),
             stats ? Promise.resolve(stats) : api('/library/stats'),
         ]);
+        albums = rawAlbums || [];
+        stats = rawStats || stats;
         state.stats = stats;
     } catch { /* noop */ }
 
@@ -258,7 +269,7 @@ async function HomeView() {
 async function ArtistsView() {
     let artists = [];
     try {
-        artists = await api('/artists');
+        artists = (await api('/artists')) || [];
         state.artists = artists;
     } catch { /* noop */ }
 
@@ -312,7 +323,7 @@ async function ArtistView(id) {
 async function AlbumsView() {
     let albums = [];
     try {
-        albums = await api('/albums');
+        albums = (await api('/albums')) || [];
         state.albums = albums;
     } catch { /* noop */ }
 

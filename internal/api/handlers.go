@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -195,10 +196,19 @@ func handleSearch(db *database.DB) http.HandlerFunc {
 func handleScan(db *database.DB, cfg *config.Config, hub *ws.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("scan panic: %v", r)
+					hub.Broadcast("scan_error", map[string]string{"error": fmt.Sprintf("panic: %v", r)})
+				}
+			}()
+
+			log.Printf("scan: starting scan of %s", cfg.MusicDir)
 			hub.Broadcast("scan_started", map[string]string{"status": "started"})
 
 			artworkDir := filepath.Join(cfg.DataDir, "artwork")
 			err := scanner.Scan(db, cfg.MusicDir, artworkDir, func(scanned, total int) {
+				log.Printf("scan: %d/%d", scanned, total)
 				hub.Broadcast("scan_progress", map[string]int{
 					"scanned": scanned,
 					"total":   total,

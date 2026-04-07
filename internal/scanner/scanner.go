@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/dhowden/tag"
 	"github.com/thequ3st/napstarr/internal/database"
@@ -84,57 +85,105 @@ func Scan(db *database.DB, musicDir string, artworkDir string, progress func(int
 		return fmt.Errorf("cleanup: %w", err)
 	}
 
+	// Phase 4: fetch missing album artwork from Cover Art Archive (async, non-blocking).
+	go fetchMissingArtwork(db, artworkDir)
+
 	return nil
 }
 
-func processFile(tx *sql.Tx, path string, musicDir string, artworkDir string) error {
-	f, err := os.Open(path)
+func fetchMissingArtwork(db *database.DB, artworkDir string) {
+	rows, err := db.Reader.Query(`
+		SELECT al.id, ar.name, al.title
+		FROM albums al
+		JOIN artists ar ON ar.id = al.artist_id
+		WHERE al.has_artwork = 0`)
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "artwork fetch query: %v\n", err)
+		return
 	}
-	defer f.Close()
+	defer rows.Close()
 
+	type albumInfo struct {
+		id, artist, title string
+	}
+	var missing []albumInfo
+	for rows.Next() {
+		var a albumInfo
+		rows.Scan(&a.id, &a.artist, &a.title)
+		missing = append(missing, a)
+	}
+
+	fmt.Fprintf(os.Stderr, "artwork: fetching art for %d albums\n", len(missing))
+	fetched := 0
+	for _, a := range missing {
+		if err := FetchArtwork(a.artist, a.title, a.id, artworkDir); err == nil {
+			db.Writer.Exec("UPDATE albums SET has_artwork = 1 WHERE id = ?", a.id)
+			fetched++
+			fmt.Fprintf(os.Stderr, "artwork: fetched %s - %s (%d/%d)\n", a.artist, a.title, fetched, len(missing))
+		}
+		// Rate limit: MusicBrainz asks for 1 req/sec
+		time.Sleep(1100 * time.Millisecond)
+	}
+	fmt.Fprintf(os.Stderr, "artwork: done, fetched %d/%d\n", fetched, len(missing))
+}
+
+func processFile(tx *sql.Tx, path string, musicDir string, artworkDir string) error {
 	ext := strings.ToLower(filepath.Ext(path))
 	format := audioExts[ext]
 
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	fileSize := info.Size()
-
-	// Read tags; tolerate missing metadata.
-	m, tagErr := tag.ReadFrom(f)
-
 	var artistName, albumTitle, trackTitle, genre string
 	var year, trackNum, discNum int
+	var fileSize int64
 
-	if tagErr == nil && m != nil {
-		artistName = strings.TrimSpace(m.Artist())
-		albumTitle = strings.TrimSpace(m.Album())
-		trackTitle = strings.TrimSpace(m.Title())
-		genre = strings.TrimSpace(m.Genre())
-		year = m.Year()
-		trackNum, _ = m.Track()
-		discNum, _ = m.Disc()
+	// Try to open and read tags — but don't fail if FUSE mount is unresponsive.
+	f, openErr := os.Open(path)
+	if openErr == nil {
+		defer f.Close()
+
+		if info, err := f.Stat(); err == nil {
+			fileSize = info.Size()
+		}
+
+		if m, tagErr := tag.ReadFrom(f); tagErr == nil && m != nil {
+			artistName = strings.TrimSpace(m.Artist())
+			albumTitle = strings.TrimSpace(m.Album())
+			trackTitle = strings.TrimSpace(m.Title())
+			genre = strings.TrimSpace(m.Genre())
+			year = m.Year()
+			trackNum, _ = m.Track()
+			discNum, _ = m.Disc()
+		}
+
+		// Try artwork extraction.
+		if _, seekErr := f.Seek(0, 0); seekErr == nil {
+			// defer artwork to after we have albumID
+		}
 	}
 
-	// Fall back to directory names if tags are empty.
+	// Always fall back to path-based metadata for anything missing.
+	// Expected structure: musicDir/Artist/Album (Year)/Artist - Album - 01 - Track.flac
+	base := filepath.Base(path)
+	baseName := strings.TrimSuffix(base, filepath.Ext(base))
+	albumDir := filepath.Dir(path)
+	albumDirName := filepath.Base(albumDir)
+	artistDir := filepath.Dir(albumDir)
+	artistDirName := filepath.Base(artistDir)
+
 	if trackTitle == "" {
-		base := filepath.Base(path)
-		trackTitle = strings.TrimSuffix(base, filepath.Ext(base))
+		trackTitle = parseTrackTitle(baseName)
 	}
 	if albumTitle == "" {
-		albumTitle = filepath.Base(filepath.Dir(path))
+		albumTitle, year = parseAlbumDir(albumDirName)
 	}
 	if artistName == "" {
-		albumDir := filepath.Dir(path)
-		artistDir := filepath.Dir(albumDir)
 		if artistDir != musicDir && artistDir != "." {
-			artistName = filepath.Base(artistDir)
+			artistName = artistDirName
 		} else {
 			artistName = "Unknown Artist"
 		}
+	}
+	if trackNum == 0 {
+		trackNum = parseTrackNum(baseName)
 	}
 	if discNum < 1 {
 		discNum = 1
@@ -166,18 +215,64 @@ func processFile(tx *sql.Tx, path string, musicDir string, artworkDir string) er
 		return fmt.Errorf("upsert track: %w", err)
 	}
 
-	// Extract artwork (best-effort).
-	if _, seekErr := f.Seek(0, 0); seekErr == nil {
-		_ = ExtractArtwork(f, albumID, artworkDir)
+	// Try embedded artwork only (fast, no network). Network art fetch happens after scan.
+	if f != nil {
+		if _, seekErr := f.Seek(0, 0); seekErr == nil {
+			_ = ExtractArtwork(f, albumID, artworkDir)
+		}
 	}
 
-	// Mark album as having artwork if file exists.
 	artFile := filepath.Join(artworkDir, albumID+".jpg")
 	if _, statErr := os.Stat(artFile); statErr == nil {
 		tx.Exec("UPDATE albums SET has_artwork = 1 WHERE id = ?", albumID)
 	}
 
 	return nil
+}
+
+// parseTrackTitle extracts track title from filename like "Artist - Album - 01 - Track Title"
+func parseTrackTitle(baseName string) string {
+	parts := strings.Split(baseName, " - ")
+	if len(parts) >= 4 {
+		return strings.Join(parts[3:], " - ")
+	}
+	if len(parts) >= 2 {
+		return parts[len(parts)-1]
+	}
+	return baseName
+}
+
+// parseAlbumDir extracts album title and year from "Album Name (2006)"
+func parseAlbumDir(dirName string) (string, int) {
+	// Try to extract year from parentheses at the end
+	if idx := strings.LastIndex(dirName, "("); idx > 0 {
+		yearPart := strings.TrimRight(dirName[idx+1:], ")")
+		yearPart = strings.TrimSpace(yearPart)
+		if len(yearPart) == 4 {
+			year := 0
+			fmt.Sscanf(yearPart, "%d", &year)
+			if year >= 1900 && year <= 2100 {
+				return strings.TrimSpace(dirName[:idx]), year
+			}
+		}
+	}
+	return dirName, 0
+}
+
+// parseTrackNum extracts track number from filename like "Artist - Album - 01 - Track"
+func parseTrackNum(baseName string) int {
+	parts := strings.Split(baseName, " - ")
+	if len(parts) >= 3 {
+		num := 0
+		fmt.Sscanf(strings.TrimSpace(parts[2]), "%d", &num)
+		if num > 0 {
+			return num
+		}
+	}
+	// Try leading digits
+	num := 0
+	fmt.Sscanf(baseName, "%d", &num)
+	return num
 }
 
 func computeSortName(name string) string {
