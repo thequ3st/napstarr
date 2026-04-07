@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B5CF6"/>
+      <stop offset="100%" style="stop-color:#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="inner" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#A78BFA"/>
+      <stop offset="100%" style="stop-color:#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer ring — vinyl record -->
+  <circle cx="256" cy="256" r="240" fill="#1e1e1e" stroke="url(#glow)" stroke-width="4"/>
+  <!-- Grooves -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#2a2a2a" stroke-width="0.5"/>
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+  <circle cx="256" cy="256" r="140" fill="none" stroke="#2a2a2a" stroke-width="0.5"/>
+  <circle cx="256" cy="256" r="120" fill="none" stroke="#2a2a2a" stroke-width="1"/>
+  <!-- Label area -->
+  <circle cx="256" cy="256" r="90" fill="#141414" stroke="url(#glow)" stroke-width="2"/>
+  <!-- Center hub -->
+  <circle cx="256" cy="256" r="12" fill="url(#inner)"/>
+  <!-- Network nodes — P2P constellation -->
+  <circle cx="256" cy="200" r="6" fill="#8B5CF6" opacity="0.9"/>
+  <circle cx="300" cy="230" r="5" fill="#8B5CF6" opacity="0.7"/>
+  <circle cx="290" cy="280" r="5" fill="#8B5CF6" opacity="0.7"/>
+  <circle cx="240" cy="300" r="6" fill="#8B5CF6" opacity="0.9"/>
+  <circle cx="210" cy="245" r="5" fill="#8B5CF6" opacity="0.7"/>
+  <!-- Network connections -->
+  <line x1="256" y1="200" x2="300" y2="230" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+  <line x1="300" y1="230" x2="290" y2="280" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+  <line x1="290" y1="280" x2="240" y2="300" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+  <line x1="240" y1="300" x2="210" y2="245" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+  <line x1="210" y1="245" x2="256" y2="200" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+  <!-- Cross connections -->
+  <line x1="256" y1="200" x2="290" y2="280" stroke="#8B5CF6" stroke-width="1" opacity="0.2"/>
+  <line x1="300" y1="230" x2="240" y2="300" stroke="#8B5CF6" stroke-width="1" opacity="0.2"/>
+  <line x1="210" y1="245" x2="300" y2="230" stroke="#8B5CF6" stroke-width="1" opacity="0.2"/>
+  <!-- Star/asterisk in center — the "starr" -->
+  <text x="256" y="268" text-anchor="middle" fill="url(#inner)" font-size="32" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,sans-serif">N</text>
+</svg>
