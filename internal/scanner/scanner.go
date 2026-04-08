@@ -158,32 +158,61 @@ func processFile(tx *sql.Tx, path string, musicDir string, artworkDir string) er
 	}
 
 	// Always fall back to path-based metadata for anything missing.
-	// Expected structure: musicDir/Artist/Album (Year)/Artist - Album - 01 - Track.flac
+	// Structure: musicDir/Artist/Album (Year)/Track.flac
+	//        or: musicDir/Artist/Album (Year)/CD 01/Track.flac (multi-disc)
+	//
+	// Use the known musicDir root to determine levels correctly.
 	base := filepath.Base(path)
 	baseName := strings.TrimSuffix(base, filepath.Ext(base))
-	albumDir := filepath.Dir(path)
-	albumDirName := filepath.Base(albumDir)
-	artistDir := filepath.Dir(albumDir)
-	artistDirName := filepath.Base(artistDir)
+
+	// Get the relative path from musicDir
+	relPath, _ := filepath.Rel(musicDir, path)
+	parts := strings.Split(filepath.ToSlash(relPath), "/")
+	// parts could be:
+	//   [Artist, Album, Track.flac]           — 3 parts (standard)
+	//   [Artist, Album, Disc, Track.flac]     — 4 parts (multi-disc)
+	//   [Artist, Album, Disc, Sub, Track.flac] — 5+ parts (deep nesting)
+
+	var pathArtist, pathAlbum, pathDisc string
+	if len(parts) >= 3 {
+		pathArtist = parts[0]
+		pathAlbum = parts[1]
+		if len(parts) >= 4 {
+			// Multi-disc: parts[2] is the disc folder (CD 01, Vinyl 01, etc.)
+			pathDisc = parts[2]
+		}
+	} else if len(parts) == 2 {
+		// Flat: just Artist/Track.flac
+		pathArtist = parts[0]
+		pathAlbum = "Unknown Album"
+	}
 
 	if trackTitle == "" {
 		trackTitle = parseTrackTitle(baseName)
 	}
+	if albumTitle == "" && pathAlbum != "" {
+		albumTitle, year = parseAlbumDir(pathAlbum)
+	}
 	if albumTitle == "" {
-		albumTitle, year = parseAlbumDir(albumDirName)
+		albumTitle = "Unknown Album"
+	}
+	if artistName == "" && pathArtist != "" {
+		artistName = pathArtist
 	}
 	if artistName == "" {
-		if artistDir != musicDir && artistDir != "." {
-			artistName = artistDirName
-		} else {
-			artistName = "Unknown Artist"
-		}
+		artistName = "Unknown Artist"
 	}
 	if trackNum == 0 {
 		trackNum = parseTrackNum(baseName)
 	}
 	if discNum < 1 {
-		discNum = 1
+		// Try to parse disc number from disc folder name
+		if pathDisc != "" {
+			discNum = parseDiscNum(pathDisc)
+		}
+		if discNum < 1 {
+			discNum = 1
+		}
 	}
 
 	// Upsert artist.
@@ -254,6 +283,25 @@ func parseAlbumDir(dirName string) (string, int) {
 		}
 	}
 	return dirName, 0
+}
+
+// parseDiscNum extracts disc number from folder names like "CD 01", "Disc 2", "12 Vinyl 01"
+func parseDiscNum(dirName string) int {
+	lower := strings.ToLower(dirName)
+	var num int
+	// Try "CD 01", "Disc 2", "Disc01"
+	for _, prefix := range []string{"cd ", "cd", "disc ", "disc", "digital media "} {
+		if strings.HasPrefix(lower, prefix) {
+			rest := strings.TrimSpace(dirName[len(prefix):])
+			fmt.Sscanf(rest, "%d", &num)
+			if num > 0 {
+				return num
+			}
+		}
+	}
+	// Try trailing number after space: "12 Vinyl 01" → 1, but we want disc grouping
+	// Just return 1 for anything we can't parse
+	return 1
 }
 
 // parseTrackNum extracts track number from filename like "Artist - Album - 01 - Track"
