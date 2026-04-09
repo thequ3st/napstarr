@@ -43,6 +43,7 @@ func NewRouter(db *database.DB, cfg *config.Config, hub *ws.Hub, inst *identity.
 
 	// Library management
 	mux.HandleFunc("POST /api/library/scan", AuthRequired(AdminRequired(handleScan(db, cfg, hub)), db))
+	mux.HandleFunc("POST /api/library/enrich", AuthRequired(AdminRequired(handleEnrich(db, hub)), db))
 	mux.HandleFunc("GET /api/library/stats", AuthRequired(handleStats(db), db))
 
 	// Listen history

@@ -14,6 +14,7 @@ import (
 	"github.com/thequ3st/napstarr/internal/database"
 	"github.com/thequ3st/napstarr/internal/identity"
 	"github.com/thequ3st/napstarr/internal/library"
+	"github.com/thequ3st/napstarr/internal/metadata"
 	"github.com/thequ3st/napstarr/internal/scanner"
 	"github.com/thequ3st/napstarr/internal/streaming"
 	"github.com/thequ3st/napstarr/internal/ws"
@@ -228,9 +229,29 @@ func handleScan(db *database.DB, cfg *config.Config, hub *ws.Hub) http.HandlerFu
 			}
 
 			hub.Broadcast("scan_complete", map[string]string{"status": "complete"})
+
+			// Enrich metadata from Deezer + MusicBrainz in background
+			go func() {
+				hub.Broadcast("enrich_started", map[string]string{"status": "enriching metadata"})
+				metadata.EnrichLibrary(db, filepath.Join(cfg.DataDir, "artwork"))
+				library.RebuildSearchIndex(db)
+				hub.Broadcast("enrich_complete", map[string]string{"status": "metadata enriched"})
+			}()
 		}()
 
 		JSON(w, http.StatusAccepted, map[string]string{"status": "scan started"})
+	}
+}
+
+func handleEnrich(db *database.DB, hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			hub.Broadcast("enrich_started", map[string]string{"status": "enriching metadata"})
+			metadata.EnrichLibrary(db, filepath.Join("/data", "artwork"))
+			library.RebuildSearchIndex(db)
+			hub.Broadcast("enrich_complete", map[string]string{"status": "metadata enriched"})
+		}()
+		JSON(w, http.StatusAccepted, map[string]string{"status": "enrichment started"})
 	}
 }
 
