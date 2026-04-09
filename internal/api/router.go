@@ -33,7 +33,7 @@ func NewRouter(db *database.DB, cfg *config.Config, hub *ws.Hub, inst *identity.
 	mux.HandleFunc("GET /api/tracks/{id}", handleGetTrack(db))
 
 	// Streaming (auth required)
-	mux.HandleFunc("GET /api/stream/{id}", AuthRequired(handleStream(db), db))
+	mux.HandleFunc("GET /api/stream/{id}", handleStream(db))
 
 	// Artwork (public for img tags)
 	mux.HandleFunc("GET /api/artwork/album/{id}", handleArtwork(cfg))

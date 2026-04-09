@@ -135,7 +135,7 @@ func GetAlbum(db *database.DB, id string) (*database.Album, error) {
 	rows, err := db.Reader.Query(`
 		SELECT t.id, t.album_id, t.artist_id, ar.name, al.title,
 		       t.title, t.track_number, t.disc_number, t.duration_ms,
-		       t.file_size, t.format, t.bitrate, t.sample_rate
+		       t.file_size, t.format
 		FROM tracks t
 		JOIN artists ar ON ar.id = t.artist_id
 		JOIN albums al ON al.id = t.album_id
@@ -150,7 +150,7 @@ func GetAlbum(db *database.DB, id string) (*database.Album, error) {
 		var t database.Track
 		if err := rows.Scan(&t.ID, &t.AlbumID, &t.ArtistID, &t.ArtistName,
 			&t.AlbumTitle, &t.Title, &t.TrackNumber, &t.DiscNumber, &t.DurationMs,
-			&t.FileSize, &t.Format, &t.Bitrate, &t.SampleRate); err != nil {
+			&t.FileSize, &t.Format); err != nil {
 			return nil, fmt.Errorf("scan track: %w", err)
 		}
 		a.Tracks = append(a.Tracks, t)
@@ -166,14 +166,14 @@ func GetTrack(db *database.DB, id string) (*database.Track, error) {
 	err := db.Reader.QueryRow(`
 		SELECT t.id, t.album_id, t.artist_id, ar.name, al.title,
 		       t.title, t.track_number, t.disc_number, t.duration_ms,
-		       t.file_path, t.file_size, t.format, t.bitrate, t.sample_rate
+		       t.file_path, t.file_size, t.format
 		FROM tracks t
 		JOIN artists ar ON ar.id = t.artist_id
 		JOIN albums al ON al.id = t.album_id
 		WHERE t.id = ?`, id,
 	).Scan(&t.ID, &t.AlbumID, &t.ArtistID, &t.ArtistName, &t.AlbumTitle,
 		&t.Title, &t.TrackNumber, &t.DiscNumber, &t.DurationMs,
-		&t.FilePath, &t.FileSize, &t.Format, &t.Bitrate, &t.SampleRate)
+		&t.FilePath, &t.FileSize, &t.Format)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("track not found")

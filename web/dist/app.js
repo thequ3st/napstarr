@@ -890,15 +890,29 @@
   // Handle stream errors — track file not accessible, skip to next
   audio.addEventListener('error', () => {
     console.warn('Stream error for track:', state.currentTrack?.title);
-    // Show brief error indicator
     const titleEl = document.getElementById('player-title');
     if (titleEl && state.currentTrack) {
-      titleEl.textContent = state.currentTrack.title + ' (unavailable)';
+      titleEl.textContent = state.currentTrack.title + ' — unavailable';
       titleEl.style.color = '#ef4444';
       setTimeout(() => { titleEl.style.color = ''; }, 2000);
     }
-    // Auto-skip to next track after a brief delay
-    setTimeout(() => nextTrack(), 1500);
+    // Auto-skip to next track quickly
+    setTimeout(() => nextTrack(), 800);
+  });
+
+  // Show loading state while audio is buffering
+  audio.addEventListener('waiting', () => {
+    const titleEl = document.getElementById('player-title');
+    if (titleEl && state.currentTrack) {
+      titleEl.textContent = state.currentTrack.title + ' — loading...';
+    }
+  });
+
+  audio.addEventListener('canplay', () => {
+    const titleEl = document.getElementById('player-title');
+    if (titleEl && state.currentTrack) {
+      titleEl.textContent = state.currentTrack.title || 'Unknown';
+    }
   });
 
   // ---- Global Click Delegation ----

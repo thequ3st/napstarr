@@ -56,12 +56,11 @@ func openWithWarmup(path string) (*os.File, error) {
 	entries, _ := os.ReadDir(parentDir)
 	_ = entries // just trigger the readdir
 
-	// Retry with backoff: 500ms, 1s, 2s, 4s
+	// Retry with short backoff: 200ms, 500ms, 1s — don't block the player too long
 	for _, delay := range []time.Duration{
+		200 * time.Millisecond,
 		500 * time.Millisecond,
 		1 * time.Second,
-		2 * time.Second,
-		4 * time.Second,
 	} {
 		time.Sleep(delay)
 		f, err = os.Open(path)
