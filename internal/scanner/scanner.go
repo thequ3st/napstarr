@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dhowden/tag"
 	"github.com/thequ3st/napstarr/internal/database"
 )
 
@@ -132,30 +131,9 @@ func processFile(tx *sql.Tx, path string, musicDir string, artworkDir string) er
 	var year, trackNum, discNum int
 	var fileSize int64
 
-	// Try to open and read tags — but don't fail if FUSE mount is unresponsive.
-	f, openErr := os.Open(path)
-	if openErr == nil {
-		defer f.Close()
-
-		if info, err := f.Stat(); err == nil {
-			fileSize = info.Size()
-		}
-
-		if m, tagErr := tag.ReadFrom(f); tagErr == nil && m != nil {
-			artistName = strings.TrimSpace(m.Artist())
-			albumTitle = strings.TrimSpace(m.Album())
-			trackTitle = strings.TrimSpace(m.Title())
-			genre = strings.TrimSpace(m.Genre())
-			year = m.Year()
-			trackNum, _ = m.Track()
-			discNum, _ = m.Disc()
-		}
-
-		// Try artwork extraction.
-		if _, seekErr := f.Seek(0, 0); seekErr == nil {
-			// defer artwork to after we have albumID
-		}
-	}
+	// Skip file opens during scan — FUSE mounts are too slow.
+	// Use path-based metadata only. Tags read on-demand during streaming.
+	var f *os.File // nil — we don't open files during scan
 
 	// Always fall back to path-based metadata for anything missing.
 	// Structure: musicDir/Artist/Album (Year)/Track.flac
