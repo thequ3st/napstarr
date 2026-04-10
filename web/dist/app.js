@@ -1,1096 +1,1111 @@
 // ============================================
-// Napstarr — Vanilla JS SPA
+// Napstarr — Midnight Vinyl SPA
 // ============================================
 
 (function () {
   'use strict';
 
   // ---- State ----
-  const state = {
-    authenticated: false,
-    view: 'home',
-    viewParams: {},
-    instance: null,
-    stats: null,
-    peers: [],
+  var state = {
+    user: null,
+    artists: [],
+    albums: [],
+    currentAlbum: null,
+    currentArtist: null,
     queue: [],
-    queueIndex: -1,
+    queueIndex: 0,
     playing: false,
     currentTrack: null,
-    currentAlbumId: null,
     volume: 0.8,
     isRemote: false,
     remotePeerId: null,
     remotePeerName: null,
+    stats: null,
+    instance: null,
+    peers: []
   };
 
-  const audio = document.getElementById('audio-el');
+  // ---- Audio ----
+  var audio = new Audio();
   audio.volume = state.volume;
+  audio.preload = 'metadata';
 
-  // ---- Refs ----
-  const $login = document.getElementById('login-screen');
-  const $app = document.getElementById('app-shell');
-  const $main = document.getElementById('main-content');
-  const $modal = document.getElementById('modal-overlay');
-  const $modalContent = document.getElementById('modal-content');
+  // ---- DOM refs ----
+  var $loginScreen = document.getElementById('login-screen');
+  var $appShell = document.getElementById('app-shell');
+  var $loginForm = document.getElementById('login-form');
+  var $loginError = document.getElementById('login-error');
+  var $viewContainer = document.getElementById('view-container');
+  var $playerBar = document.getElementById('player-bar');
+  var $playerTitle = document.getElementById('player-title');
+  var $playerArtist = document.getElementById('player-artist');
+  var $playerArt = document.getElementById('player-art');
+  var $playerTime = document.getElementById('player-time');
+  var $playerProgressFill = document.getElementById('player-progress-fill');
+  var $playerProgressWrap = document.getElementById('player-progress-wrap');
+  var $playerPlayBtn = document.getElementById('player-play-btn');
+  var $playIcon = document.getElementById('play-icon');
+  var $pauseIcon = document.getElementById('pause-icon');
+  var $playerRemoteBadge = document.getElementById('player-remote-badge');
+  var $playerRemoteName = document.getElementById('player-remote-name');
+  var $volumeSlider = document.getElementById('volume-slider');
+  var $modalOverlay = document.getElementById('modal-overlay');
+  var $modalContent = document.getElementById('modal-content');
+  var $toastContainer = document.getElementById('toast-container');
+  var $instanceInfo = document.getElementById('instance-info');
 
-  // ---- API ----
-  async function api(path, opts = {}) {
-    const res = await fetch('/api' + path, {
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...opts.headers },
-      ...opts,
-    });
-    if (res.status === 401) {
-      state.authenticated = false;
-      showLogin();
-      throw new Error('unauthorized');
-    }
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'HTTP ' + res.status);
-    }
-    if (res.status === 204 || res.headers.get('content-length') === '0') return null;
-    return res.json();
-  }
-
-  // ---- HTML Helpers ----
+  // ---- Helpers ----
   function esc(str) {
     if (!str) return '';
-    const d = document.createElement('div');
+    var d = document.createElement('div');
     d.textContent = String(str);
     return d.innerHTML;
   }
 
-  function initials(name) {
-    if (!name) return '?';
-    return name.split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join('').toUpperCase();
+  function fmtDuration(ms) {
+    if (!ms && ms !== 0) return '0:00';
+    var totalSec = Math.floor(ms / 1000);
+    var m = Math.floor(totalSec / 60);
+    var s = totalSec % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
   }
 
-  function fmtDuration(ms) {
-    if (!ms || ms <= 0) return '0:00';
-    const total = Math.floor(ms / 1000);
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return m + ':' + String(s).padStart(2, '0');
+  function fmtDurationSec(sec) {
+    if (!sec && sec !== 0) return '0:00';
+    sec = Math.floor(sec);
+    var m = Math.floor(sec / 60);
+    var s = sec % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
   }
 
   function fmtDurationLong(ms) {
-    if (!ms || ms <= 0) return '0 min';
-    const totalMin = Math.floor(ms / 60000);
+    if (!ms) return '0 min';
+    var totalMin = Math.floor(ms / 60000);
     if (totalMin < 60) return totalMin + ' min';
-    return Math.floor(totalMin / 60) + ' hr ' + (totalMin % 60) + ' min';
+    var hr = Math.floor(totalMin / 60);
+    var min = totalMin % 60;
+    return hr + ' hr' + (min > 0 ? ' ' + min + ' min' : '');
   }
 
-  function fmtSize(mb) {
-    if (!mb) return '0 MB';
-    if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
-    return Math.round(mb) + ' MB';
+  function fmtSize(bytes) {
+    if (!bytes) return '0 B';
+    var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var i = 0;
+    var v = bytes;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return v.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
   }
 
-  function truncate(str, len) {
-    if (!str) return '';
-    return str.length > len ? str.slice(0, len) + '...' : str;
+  function getInitials(name) {
+    if (!name) return '?';
+    var parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+    return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
   }
 
-  function timeAgo(dateStr) {
-    if (!dateStr) return 'never';
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return mins + 'm ago';
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return hrs + 'h ago';
-    const days = Math.floor(hrs / 24);
-    return days + 'd ago';
+  function staggerClass(i) {
+    var n = Math.min(i + 1, 12);
+    return 'stagger-' + n;
   }
-
-  function loading() {
-    return '<div class="loading"><div class="spinner"></div></div>';
-  }
-
-  function emptyState(icon, title, desc) {
-    return `<div class="empty-state">
-      <div class="empty-state-icon">${icon}</div>
-      <h3>${esc(title)}</h3>
-      <p>${esc(desc)}</p>
-    </div>`;
-  }
-
-  const svgDisc = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
-  const svgPlay = '<polygon points="8,5 19,12 8,19" fill="currentColor"/>';
-  const svgShuffle = '<path d="M16 3h5v5M4 20L20.2 3.8M21 16v5h-5M15 15l5.1 5.1M4 4l5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  const svgBack = '<path d="M19 12H5m0 0l7 7m-7-7l7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  const svgSearch = '<path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  const svgGlobe = '<path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  const svgRefresh = '<path d="M4 4v5h5M20 20v-5h-5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 9A9 9 0 005.64 5.64L4 4m16 16l-1.64-1.64A9 9 0 013.51 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  const svgUser = '<path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zm-4 7a7 7 0 00-7 7h14a7 7 0 00-7-7z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-  const svgX = '<path d="M18 6L6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
-  const svgTrash = '<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
 
   // ---- Toast ----
-  function toast(msg) {
-    const el = document.createElement('div');
-    el.className = 'toast';
-    el.textContent = msg;
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 3200);
+  function toast(message, type) {
+    type = type || 'info';
+    var el = document.createElement('div');
+    el.className = 'toast toast-' + type;
+    el.textContent = message;
+    $toastContainer.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = '0';
+      setTimeout(function () { el.remove(); }, 300);
+    }, 3500);
+  }
+
+  // ---- API Client ----
+  async function api(path, options) {
+    options = options || {};
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+    var fetchOpts = Object.assign({}, options, { credentials: 'same-origin', headers: headers });
+    // Don't set Content-Type for GET/HEAD (no body)
+    if (!options.body) delete fetchOpts.headers['Content-Type'];
+    var res;
+    try {
+      res = await fetch('/api' + path, fetchOpts);
+    } catch (e) {
+      throw new Error('Network error');
+    }
+    if (res.status === 401) {
+      showLogin();
+      throw new Error('unauthorized');
+    }
+    if (!res.ok) {
+      var d = {};
+      try { d = await res.json(); } catch (_) {}
+      throw new Error(d.error || 'HTTP ' + res.status);
+    }
+    if (res.status === 204) return null;
+    return res.json();
   }
 
   // ---- Auth ----
   function showLogin() {
-    $login.classList.remove('hidden');
-    $app.classList.add('hidden');
+    $loginScreen.hidden = false;
+    $appShell.hidden = true;
+    state.user = null;
   }
 
   function showApp() {
-    $login.classList.add('hidden');
-    $app.classList.remove('hidden');
+    $loginScreen.hidden = true;
+    $appShell.hidden = false;
   }
 
-  async function checkAuth() {
-    try {
-      state.stats = await api('/library/stats');
-      state.authenticated = true;
-      showApp();
-      loadInstance();
-      navigateTo(state.view, state.viewParams);
-    } catch {
-      showLogin();
-    }
-  }
-
-  // Login form
-  document.getElementById('login-form').addEventListener('submit', async (e) => {
+  $loginForm.addEventListener('submit', async function (e) {
     e.preventDefault();
-    const errEl = document.getElementById('login-error');
-    errEl.textContent = '';
-    const user = document.getElementById('login-user').value;
-    const pass = document.getElementById('login-pass').value;
+    $loginError.hidden = true;
+    var user = document.getElementById('login-user').value.trim();
+    var pass = document.getElementById('login-pass').value;
     try {
-      await api('/auth/login', {
+      var data = await api('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ username: user, password: pass }),
+        body: JSON.stringify({ username: user, password: pass })
       });
-      state.authenticated = true;
+      state.user = data || { username: user };
       showApp();
-      loadInstance();
-      navigateTo('home');
+      navigate(location.hash || '#home');
+      loadInstanceInfo();
     } catch (err) {
-      errEl.textContent = err.message === 'unauthorized' ? 'Invalid credentials' : err.message;
+      $loginError.textContent = err.message === 'unauthorized' ? 'Invalid credentials' : err.message;
+      $loginError.hidden = false;
     }
   });
-
-  // ---- Instance Info ----
-  async function loadInstance() {
-    try {
-      state.instance = await api('/instance');
-      const nameEl = document.getElementById('instance-name');
-      const idEl = document.getElementById('instance-id');
-      if (nameEl) nameEl.textContent = state.instance.name || 'Napstarr';
-      if (idEl) idEl.textContent = truncate(state.instance.id, 12);
-    } catch { /* ok */ }
-  }
 
   // ---- Navigation ----
-  function navigateTo(view, params) {
-    state.view = view;
-    state.viewParams = params || {};
-    updateNav();
-    renderView();
+  function navigate(hash) {
+    hash = hash || '#home';
+    var view = hash.replace('#', '').split('/')[0];
+    var param = hash.split('/')[1] || null;
+    var param2 = hash.split('/')[2] || null;
+
+    // Update nav active states
+    document.querySelectorAll('.nav-link, .mobile-tab').forEach(function (el) {
+      var v = el.getAttribute('data-view');
+      el.classList.toggle('active', v === view || (v === 'home' && view === ''));
+    });
+
+    // Route
+    switch (view) {
+      case '':
+      case 'home':
+        renderHome();
+        break;
+      case 'artists':
+        if (param) renderArtistDetail(param);
+        else renderArtists();
+        break;
+      case 'albums':
+        if (param) renderAlbumDetail(param);
+        else renderAlbums();
+        break;
+      case 'search':
+        renderSearch();
+        break;
+      case 'network':
+        if (param === 'peer' && param2) renderPeerBrowse(param2);
+        else renderNetwork();
+        break;
+      default:
+        renderHome();
+    }
+
+    // Scroll to top
+    document.querySelector('.main-content').scrollTop = 0;
   }
 
-  function updateNav() {
-    // Sidebar
-    document.querySelectorAll('#sidebar-nav .nav-link').forEach(el => {
-      el.classList.toggle('active', el.dataset.view === state.view);
-    });
-    // Mobile
-    document.querySelectorAll('#mobile-tabs .tab-link').forEach(el => {
-      el.classList.toggle('active', el.dataset.view === state.view);
-    });
-  }
-
-  // Nav click handlers
-  document.querySelectorAll('[data-view]').forEach(el => {
-    el.addEventListener('click', (e) => {
-      e.preventDefault();
-      navigateTo(el.dataset.view);
-    });
+  window.addEventListener('hashchange', function () {
+    navigate(location.hash);
   });
 
-  // ---- View Router ----
-  async function renderView() {
-    $main.innerHTML = loading();
-    try {
-      switch (state.view) {
-        case 'home': await renderHome(); break;
-        case 'artists': await renderArtists(); break;
-        case 'artist-detail': await renderArtistDetail(state.viewParams.id); break;
-        case 'albums': await renderAlbums(); break;
-        case 'album-detail': await renderAlbumDetail(state.viewParams.id); break;
-        case 'search': renderSearch(); break;
-        case 'network': await renderNetwork(); break;
-        default: $main.innerHTML = emptyState(svgDisc, 'Page Not Found', '');
-      }
-    } catch (err) {
-      console.error('View error:', err);
-      $main.innerHTML = emptyState(svgDisc, 'Something went wrong', err.message);
-    }
+  // ---- Render Helpers ----
+  function setView(html) {
+    $viewContainer.innerHTML = '<div class="fade-in">' + html + '</div>';
   }
 
-  // ---- Home View ----
+  function spinnerHTML() {
+    return '<div class="spinner"></div>';
+  }
+
+  function emptyHTML(msg) {
+    return '<div class="empty-state">' +
+      '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>' +
+      '<p>' + esc(msg) + '</p></div>';
+  }
+
+  function albumCardHTML(album, index) {
+    var art = album.artwork ? esc(album.artwork) : '';
+    var artImg = art ? '<img src="' + art + '" alt="" loading="lazy">' : '<div style="width:100%;height:100%;background:var(--elevated);display:flex;align-items:center;justify-content:center;color:var(--text-muted)"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg></div>';
+    return '<div class="album-card slide-up ' + staggerClass(index) + '" data-action="go-album" data-id="' + esc(album.id) + '">' +
+      '<div class="album-card-art">' + artImg +
+      '<div class="album-play-overlay"><div class="album-play-btn" data-action="play-album" data-id="' + esc(album.id) + '"><svg viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21"/></svg></div></div>' +
+      '</div>' +
+      '<div class="album-card-title">' + esc(album.title || album.name) + '</div>' +
+      '<div class="album-card-artist">' + esc(album.artist_name || album.artist || '') + '</div>' +
+      '</div>';
+  }
+
+  function artistCardHTML(artist, index) {
+    var hasImg = artist.image || artist.artwork;
+    var avatarContent = hasImg
+      ? '<img src="' + esc(artist.image || artist.artwork) + '" alt="" loading="lazy">'
+      : esc(getInitials(artist.name));
+    return '<div class="artist-card slide-up ' + staggerClass(index) + '" data-action="go-artist" data-id="' + esc(artist.id) + '">' +
+      '<div class="artist-avatar">' + avatarContent + '</div>' +
+      '<div class="artist-card-name">' + esc(artist.name) + '</div>' +
+      '<div class="artist-card-count">' + (artist.album_count || 0) + ' album' + ((artist.album_count || 0) === 1 ? '' : 's') + '</div>' +
+      '</div>';
+  }
+
+  function trackRowHTML(track, index, albumId, isRemote, peerId, peerName) {
+    var isCurrent = state.currentTrack && state.currentTrack.id === track.id;
+    var cls = 'track-row' + (isCurrent ? ' playing' : '');
+    var remote = isRemote ? ' data-remote="1" data-peer-id="' + esc(peerId) + '" data-peer-name="' + esc(peerName || '') + '"' : '';
+    return '<div class="' + cls + '" data-action="play-track" data-track-id="' + esc(track.id) + '" data-album-id="' + esc(albumId || '') + '" data-index="' + index + '"' + remote + '>' +
+      '<div class="track-num">' + (index + 1) + '</div>' +
+      '<div class="track-title">' + esc(track.title || track.name) + '</div>' +
+      '<div class="track-duration">' + fmtDuration(track.duration) + '</div>' +
+      '</div>';
+  }
+
+  // ---- Views ----
+
+  // Home
   async function renderHome() {
-    const [stats, recentAlbums, peers] = await Promise.all([
-      api('/library/stats').catch(() => state.stats),
-      api('/albums?recent=true').catch(() => []),
-      api('/peers').catch(() => []),
-    ]);
-    state.stats = stats || {};
-    state.peers = peers || [];
-    const s = state.stats;
-    const albums = recentAlbums || [];
-
-    let html = `
-      <div class="page-header">
-        <h1>Home</h1>
-        ${state.instance ? `<p class="home-welcome">Welcome to <strong>${esc(state.instance.name)}</strong></p>` : ''}
-      </div>
-      <div class="stats-grid">
-        <div class="stat-card"><div class="stat-value">${s.artistCount || 0}</div><div class="stat-label">Artists</div></div>
-        <div class="stat-card"><div class="stat-value">${s.albumCount || 0}</div><div class="stat-label">Albums</div></div>
-        <div class="stat-card"><div class="stat-value">${s.trackCount || 0}</div><div class="stat-label">Tracks</div></div>
-        <div class="stat-card"><div class="stat-value">${fmtSize(s.totalSizeMb)}</div><div class="stat-label">Library Size</div></div>
-      </div>
-      <div class="scan-row">
-        <button class="btn btn-secondary btn-sm" id="btn-scan">
-          <svg viewBox="0 0 24 24" width="16" height="16">${svgRefresh}</svg>
-          Scan Library
-        </button>
-        <span class="scan-status" id="scan-status"></span>
-      </div>`;
-
-    if (albums.length > 0) {
-      html += `<h2 class="section-title">Recently Added</h2>
-        <div class="album-grid">${albums.map(albumCard).join('')}</div>`;
-    } else {
-      html += emptyState(svgDisc, 'Your library is empty', 'Scan your music folder to get started.');
-    }
-
-    if (state.peers.length > 0) {
-      html += `<div style="margin-top:40px">
-        <h2 class="section-title">Network Activity</h2>
-        <div class="network-peers-row">
-          ${state.peers.map(p => `
-            <div class="network-peer-chip" data-action="go-network">
-              <span class="peer-dot ${p.status === 'online' ? 'online' : 'offline'}"></span>
-              <span>${esc(p.name || truncate(p.instanceId, 8))}</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>`;
-    }
-
-    $main.innerHTML = html;
-
-    // Scan button
-    const scanBtn = document.getElementById('btn-scan');
-    if (scanBtn) {
-      scanBtn.addEventListener('click', async () => {
-        scanBtn.disabled = true;
-        document.getElementById('scan-status').textContent = 'Scanning...';
-        try {
-          await api('/library/scan', { method: 'POST' });
-          toast('Library scan started');
-          setTimeout(() => {
-            document.getElementById('scan-status').textContent = '';
-            scanBtn.disabled = false;
-            renderHome();
-          }, 8000);
-        } catch (err) {
-          document.getElementById('scan-status').textContent = 'Error: ' + err.message;
-          scanBtn.disabled = false;
-        }
-      });
-    }
-  }
-
-  // ---- Artists View ----
-  async function renderArtists() {
-    const artists = (await api('/artists')) || [];
-
-    if (!artists.length) {
-      $main.innerHTML = `<div class="page-header"><h1>Artists</h1></div>` +
-        emptyState(`<svg viewBox="0 0 24 24" width="56" height="56">${svgUser}</svg>`, 'No artists yet', 'Add music to your library to see artists here.');
-      return;
-    }
-
-    $main.innerHTML = `
-      <div class="page-header">
-        <h1>Artists</h1>
-        <p>${artists.length} artist${artists.length !== 1 ? 's' : ''}</p>
-      </div>
-      <div class="artist-grid">
-        ${artists.map(a => `
-          <div class="artist-card" data-action="go-artist" data-id="${a.id}">
-            <div class="artist-avatar">${initials(a.name)}</div>
-            <div class="artist-card-name">${esc(a.name)}</div>
-            <div class="artist-card-meta">${a.albumCount || 0} album${(a.albumCount || 0) !== 1 ? 's' : ''}${a.trackCount ? ' &middot; ' + a.trackCount + ' tracks' : ''}</div>
-          </div>
-        `).join('')}
-      </div>`;
-  }
-
-  // ---- Artist Detail ----
-  async function renderArtistDetail(id) {
-    const [artist, albums] = await Promise.all([
-      api('/artists/' + id),
-      api('/artists/' + id + '/albums'),
-    ]);
-
-    if (!artist) {
-      $main.innerHTML = emptyState(`<svg viewBox="0 0 24 24" width="56" height="56">${svgUser}</svg>`, 'Artist not found', '');
-      return;
-    }
-
-    const albumList = albums || [];
-
-    $main.innerHTML = `
-      <a href="#" class="back-link" data-action="go-artists"><svg viewBox="0 0 24 24" width="16" height="16">${svgBack}</svg> Artists</a>
-      <div class="artist-detail-header">
-        <div class="artist-detail-avatar">${initials(artist.name)}</div>
-        <div class="artist-detail-info">
-          <h1>${esc(artist.name)}</h1>
-          <p>${albumList.length} album${albumList.length !== 1 ? 's' : ''}${artist.trackCount ? ' &middot; ' + artist.trackCount + ' tracks' : ''}</p>
-        </div>
-      </div>
-      <h2 class="section-title">Albums</h2>
-      <div class="album-grid">${albumList.map(albumCard).join('')}</div>`;
-  }
-
-  // ---- Albums View ----
-  async function renderAlbums() {
-    const albums = (await api('/albums')) || [];
-
-    if (!albums.length) {
-      $main.innerHTML = `<div class="page-header"><h1>Albums</h1></div>` +
-        emptyState(svgDisc, 'No albums yet', 'Add music to your library to see albums here.');
-      return;
-    }
-
-    $main.innerHTML = `
-      <div class="page-header">
-        <h1>Albums</h1>
-        <p>${albums.length} album${albums.length !== 1 ? 's' : ''}</p>
-      </div>
-      <div class="album-grid">${albums.map(albumCard).join('')}</div>`;
-  }
-
-  // ---- Album Detail ----
-  async function renderAlbumDetail(id) {
-    const album = await api('/albums/' + id);
-    if (!album) {
-      $main.innerHTML = emptyState(svgDisc, 'Album not found', '');
-      return;
-    }
-
-    state.currentAlbumId = album.id;
-    const tracks = album.tracks || [];
-    const totalMs = tracks.reduce((sum, t) => sum + (t.durationMs || 0), 0);
-
-    $main.innerHTML = `
-      <a href="#" class="back-link" data-action="go-albums"><svg viewBox="0 0 24 24" width="16" height="16">${svgBack}</svg> Albums</a>
-      <div class="album-detail-header">
-        <div class="album-detail-art">
-          <img src="/api/artwork/album/${album.id}" alt="${esc(album.title)}" loading="lazy">
-        </div>
-        <div class="album-detail-info">
-          <div class="album-detail-type">Album</div>
-          <h1>${esc(album.title)}</h1>
-          <div class="album-detail-meta">
-            <a href="#" data-action="go-artist" data-id="${album.artistId}">${esc(album.artistName || 'Unknown Artist')}</a>
-            ${album.year ? `<span class="dot">&middot;</span><span>${album.year}</span>` : ''}
-            <span class="dot">&middot;</span>
-            <span>${tracks.length} track${tracks.length !== 1 ? 's' : ''}</span>
-            ${totalMs > 0 ? `<span class="dot">&middot;</span><span>${fmtDurationLong(totalMs)}</span>` : ''}
-          </div>
-          <div class="album-actions">
-            <button class="btn btn-primary btn-pill" data-action="play-album" data-id="${album.id}">
-              <svg viewBox="0 0 24 24" width="18" height="18">${svgPlay}</svg> Play All
-            </button>
-            <button class="btn btn-secondary btn-pill" data-action="shuffle-album" data-id="${album.id}">
-              <svg viewBox="0 0 24 24" width="18" height="18">${svgShuffle}</svg> Shuffle
-            </button>
-          </div>
-        </div>
-      </div>
-      <div class="track-list">
-        <div class="track-list-header">
-          <span>#</span><span>Title</span><span>Album</span><span style="text-align:right">Duration</span>
-        </div>
-        ${tracks.map((t, i) => trackRow(t, i, album)).join('')}
-      </div>`;
-
-    highlightPlayingTrack();
-  }
-
-  // ---- Search View ----
-  function renderSearch() {
-    $main.innerHTML = `
-      <div class="page-header"><h1>Search</h1></div>
-      <div class="search-input-wrapper">
-        <svg class="search-icon" viewBox="0 0 24 24">${svgSearch}</svg>
-        <input type="text" class="search-input" id="search-input" placeholder="Search tracks..." autofocus>
-      </div>
-      <div id="search-results"></div>`;
-
-    let timer;
-    const input = document.getElementById('search-input');
-    input.addEventListener('input', () => {
-      clearTimeout(timer);
-      const q = input.value.trim();
-      if (!q) {
-        document.getElementById('search-results').innerHTML = '';
-        return;
-      }
-      timer = setTimeout(async () => {
-        try {
-          const results = (await api('/search?q=' + encodeURIComponent(q))) || [];
-          renderSearchResults(results);
-        } catch { /* ok */ }
-      }, 300);
-    });
-  }
-
-  function renderSearchResults(tracks) {
-    const el = document.getElementById('search-results');
-    if (!el) return;
-
-    if (!tracks.length) {
-      el.innerHTML = emptyState(`<svg viewBox="0 0 24 24" width="56" height="56">${svgSearch}</svg>`, 'No results found', 'Try a different search term.');
-      return;
-    }
-
-    el.innerHTML = `
-      <div class="search-section">
-        <h2>Tracks</h2>
-        <div class="track-list">
-          ${tracks.map((t, i) => `
-            <div class="track-row${state.currentTrack?.id === t.id ? ' playing' : ''}"
-                 data-action="play-search-track" data-track-id="${t.id}" data-index="${i}">
-              <span class="track-num">
-                <span class="num-text">${i + 1}</span>
-                <div class="playing-indicator"><span></span><span></span><span></span></div>
-              </span>
-              <span class="track-title">${esc(t.title)}</span>
-              <span class="track-album-col">${esc(t.artistName || '')}${t.albumTitle ? ' &middot; ' + esc(t.albumTitle) : ''}</span>
-              <span class="track-duration">${fmtDuration(t.durationMs)}</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>`;
-
-    // Store search tracks for queue building
-    el._searchTracks = tracks;
-  }
-
-  // ---- Network View ----
-  async function renderNetwork() {
-    const [instance, peers] = await Promise.all([
-      state.instance || api('/instance').catch(() => null),
-      api('/peers').catch(() => []),
-    ]);
-    state.instance = instance;
-    state.peers = peers || [];
-
-    let html = `<div class="page-header"><h1>Network</h1><p>P2P Federation</p></div>`;
-
-    // Instance card
-    if (instance) {
-      html += `<div class="instance-card">
-        <h2>Your Instance</h2>
-        <div class="instance-detail-row">
-          <span class="instance-detail-label">Name</span>
-          <span class="instance-detail-value">${esc(instance.name)}</span>
-        </div>
-        <div class="instance-detail-row">
-          <span class="instance-detail-label">Instance ID</span>
-          <span class="instance-detail-value">${esc(instance.id)}</span>
-        </div>
-        ${instance.publicKey ? `<div class="instance-detail-row">
-          <span class="instance-detail-label">Public Key</span>
-          <span class="instance-detail-value">${esc(truncate(instance.publicKey, 40))}</span>
-        </div>` : ''}
-        ${instance.version ? `<div class="instance-detail-row">
-          <span class="instance-detail-label">Version</span>
-          <span class="instance-detail-value">${esc(instance.version)}</span>
-        </div>` : ''}
-        ${instance.protocol ? `<div class="instance-detail-row">
-          <span class="instance-detail-label">Protocol</span>
-          <span class="instance-detail-value">${esc(instance.protocol)}</span>
-        </div>` : ''}
-        ${instance.stats ? `<div class="instance-detail-row">
-          <span class="instance-detail-label">Library</span>
-          <span class="instance-detail-value">${instance.stats.artistCount || 0} artists, ${instance.stats.albumCount || 0} albums, ${instance.stats.trackCount || 0} tracks</span>
-        </div>` : ''}
-      </div>`;
-    }
-
-    // Follow new peer
-    html += `<div class="network-section">
-      <h2 class="section-title">Follow New Peer</h2>
-      <div class="follow-form">
-        <input type="text" class="follow-input" id="follow-input" placeholder="http://friend:8484">
-        <button class="btn btn-primary btn-sm" id="btn-follow">Follow</button>
-      </div>
-    </div>`;
-
-    // Peers list
-    html += `<div class="network-section">
-      <div class="section-header">
-        <h2 class="section-title">Followed Peers</h2>
-        <span style="font-size:13px;color:var(--text-secondary)">${state.peers.length} peer${state.peers.length !== 1 ? 's' : ''}</span>
-      </div>`;
-
-    if (state.peers.length === 0) {
-      html += emptyState(`<svg viewBox="0 0 24 24" width="56" height="56">${svgGlobe}</svg>`, 'No peers yet', 'Follow another Napstarr instance to explore their library.');
-    } else {
-      html += `<div class="peer-list">
-        ${state.peers.map(p => `
-          <div class="peer-card" data-action="view-peer" data-peer-id="${p.id}" data-peer-name="${esc(p.name || '')}">
-            <span class="peer-dot ${p.status === 'online' ? 'online' : 'offline'}"></span>
-            <div class="peer-info">
-              <div class="peer-name">${esc(p.name || 'Unknown Peer')}</div>
-              <div class="peer-meta">
-                <span>ID: ${esc(truncate(p.instanceId, 10))}</span>
-                <span>Last synced: ${timeAgo(p.lastSynced)}</span>
-                ${p.lastSeen ? `<span>Seen: ${timeAgo(p.lastSeen)}</span>` : ''}
-              </div>
-            </div>
-            <div class="peer-actions">
-              <button class="btn btn-ghost btn-sm" data-action="sync-peer" data-peer-id="${p.id}" title="Sync">
-                <svg viewBox="0 0 24 24" width="16" height="16">${svgRefresh}</svg>
-              </button>
-              <button class="btn btn-ghost btn-sm" data-action="unfollow-peer" data-peer-id="${p.id}" title="Unfollow">
-                <svg viewBox="0 0 24 24" width="16" height="16">${svgTrash}</svg>
-              </button>
-            </div>
-          </div>
-        `).join('')}
-      </div>`;
-    }
-
-    html += '</div>';
-    $main.innerHTML = html;
-
-    // Follow button
-    document.getElementById('btn-follow').addEventListener('click', async () => {
-      const input = document.getElementById('follow-input');
-      const addr = input.value.trim();
-      if (!addr) return;
-      try {
-        await api('/peers', { method: 'POST', body: JSON.stringify({ address: addr }) });
-        input.value = '';
-        toast('Peer followed successfully');
-        renderNetwork();
-      } catch (err) {
-        toast('Error: ' + err.message);
-      }
-    });
-
-    // Enter to follow
-    document.getElementById('follow-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('btn-follow').click();
-    });
-  }
-
-  // ---- Peer Library Modal ----
-  async function showPeerLibrary(peerId, peerName) {
-    $modal.classList.remove('hidden');
-    $modalContent.innerHTML = `
-      <button class="modal-close" data-action="close-modal"><svg viewBox="0 0 24 24" width="18" height="18">${svgX}</svg></button>
-      <div class="modal-header">
-        <h2>${esc(peerName || 'Peer Library')}</h2>
-        <p>Browse and stream from this peer</p>
-      </div>
-      ${loading()}`;
-
+    setView(spinnerHTML());
     try {
-      const [artists, albums] = await Promise.all([
-        api('/peers/' + peerId + '/artists').catch(() => []),
-        api('/peers/' + peerId + '/albums').catch(() => []),
+      var results = await Promise.all([
+        api('/stats').catch(function () { return {}; }),
+        api('/albums?sort=recent&limit=20').catch(function () { return []; })
       ]);
+      var stats = results[0] || {};
+      var recentAlbums = results[1] || [];
+      // Normalize: API may return {albums:[]} or just []
+      if (recentAlbums.albums) recentAlbums = recentAlbums.albums;
 
-      const artistList = artists || [];
-      const albumList = albums || [];
+      state.stats = stats;
 
-      let content = `
-        <button class="modal-close" data-action="close-modal"><svg viewBox="0 0 24 24" width="18" height="18">${svgX}</svg></button>
-        <div class="modal-header">
-          <h2>${esc(peerName || 'Peer Library')}</h2>
-          <p>${artistList.length} artists, ${albumList.length} albums</p>
-        </div>`;
+      var html = '<div class="view-header"><h1>Home</h1></div>';
 
-      if (artistList.length > 0) {
-        content += `<h3 class="section-title" style="font-size:16px">Artists</h3>
-          <div class="artist-grid" style="margin-bottom:28px">
-            ${artistList.slice(0, 12).map(a => `
-              <div class="artist-card" style="cursor:default">
-                <div class="artist-avatar" style="width:80px;height:80px;font-size:24px">${initials(a.name)}</div>
-                <div class="artist-card-name">${esc(a.name)}</div>
-                <div class="artist-card-meta">${a.albumCount || 0} albums</div>
-              </div>
-            `).join('')}
-            ${artistList.length > 12 ? `<div class="artist-card" style="cursor:default;opacity:0.5"><div class="artist-avatar" style="width:80px;height:80px;font-size:16px">+${artistList.length - 12}</div><div class="artist-card-name">more</div></div>` : ''}
-          </div>`;
+      // Stats
+      html += '<div class="stats-row">';
+      html += '<div class="stat-card"><div class="stat-value">' + (stats.artist_count || stats.artists || 0) + '</div><div class="stat-label">Artists</div></div>';
+      html += '<div class="stat-card"><div class="stat-value">' + (stats.album_count || stats.albums || 0) + '</div><div class="stat-label">Albums</div></div>';
+      html += '<div class="stat-card"><div class="stat-value">' + (stats.track_count || stats.tracks || 0) + '</div><div class="stat-label">Tracks</div></div>';
+      html += '<div class="stat-card"><div class="stat-value">' + fmtSize(stats.library_size || stats.size || 0) + '</div><div class="stat-label">Library Size</div></div>';
+      html += '</div>';
+
+      // Actions
+      html += '<div class="action-row">';
+      html += '<button class="btn-outline" data-action="scan-library"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.22-8.56"/><polyline points="21 3 21 9 15 9"/></svg>Scan Library</button>';
+      html += '<button class="btn-outline" data-action="enrich-metadata"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Enrich Metadata</button>';
+      html += '</div>';
+
+      // Recent albums
+      if (recentAlbums.length > 0) {
+        html += '<h2 class="section-title">Recently Added</h2>';
+        html += '<div class="album-grid">';
+        recentAlbums.forEach(function (a, i) {
+          html += albumCardHTML(a, i);
+        });
+        html += '</div>';
+      } else {
+        html += emptyHTML('No albums yet. Scan your library to get started.');
       }
 
-      if (albumList.length > 0) {
-        content += `<h3 class="section-title" style="font-size:16px">Albums</h3>
-          <div class="album-grid">
-            ${albumList.map(a => `
-              <div class="album-card" data-action="view-remote-album" data-peer-id="${peerId}" data-album-id="${a.id}" data-peer-name="${esc(peerName || '')}">
-                <div class="album-card-art">
-                  <img src="/api/artwork/album/${a.id}" alt="${esc(a.title)}" loading="lazy" onerror="this.style.display='none'">
-                  <div class="play-overlay">
-                    <div class="play-overlay-btn"><svg viewBox="0 0 24 24">${svgPlay}</svg></div>
-                  </div>
-                </div>
-                <div class="album-card-title">${esc(a.title)}</div>
-                <div class="album-card-artist">${esc(a.artistName || 'Unknown')}</div>
-                ${a.year ? `<div class="album-card-year">${a.year}</div>` : ''}
-              </div>
-            `).join('')}
-          </div>`;
-      }
-
-      if (!artistList.length && !albumList.length) {
-        content += emptyState(svgDisc, 'Empty library', 'This peer has no music shared yet.');
-      }
-
-      $modalContent.innerHTML = content;
+      setView(html);
     } catch (err) {
-      $modalContent.innerHTML = `
-        <button class="modal-close" data-action="close-modal"><svg viewBox="0 0 24 24" width="18" height="18">${svgX}</svg></button>
-        ${emptyState(svgGlobe, 'Could not load peer library', err.message)}`;
+      if (err.message !== 'unauthorized') {
+        setView(emptyHTML('Failed to load: ' + err.message));
+      }
     }
   }
 
-  // ---- Remote Album Detail in Modal ----
-  async function showRemoteAlbum(peerId, albumId, peerName) {
-    $modalContent.innerHTML = loading();
+  // Artists
+  async function renderArtists() {
+    setView(spinnerHTML());
     try {
-      // We get albums list from peer; individual album detail may not be available for remote
-      // Use peer's albums list to find the album info
-      const albums = (await api('/peers/' + peerId + '/albums')) || [];
-      const album = albums.find(a => a.id === albumId);
+      var data = await api('/artists');
+      var artists = data || [];
+      if (data && data.artists) artists = data.artists;
+      state.artists = artists;
 
-      if (!album) {
-        $modalContent.innerHTML = `
-          <button class="modal-close" data-action="close-modal"><svg viewBox="0 0 24 24" width="18" height="18">${svgX}</svg></button>
-          ${emptyState(svgDisc, 'Album not found', '')}`;
+      var html = '<div class="view-header"><h1>Artists</h1><p>' + artists.length + ' artist' + (artists.length === 1 ? '' : 's') + '</p></div>';
+
+      if (artists.length === 0) {
+        html += emptyHTML('No artists found.');
+      } else {
+        html += '<div class="artist-grid">';
+        artists.forEach(function (a, i) {
+          html += artistCardHTML(a, i);
+        });
+        html += '</div>';
+      }
+
+      setView(html);
+    } catch (err) {
+      if (err.message !== 'unauthorized') setView(emptyHTML('Failed to load artists.'));
+    }
+  }
+
+  // Artist Detail
+  async function renderArtistDetail(id) {
+    setView(spinnerHTML());
+    try {
+      var results = await Promise.all([
+        api('/artists/' + encodeURIComponent(id)),
+        api('/artists/' + encodeURIComponent(id) + '/albums').catch(function () { return []; })
+      ]);
+      var artist = results[0] || {};
+      var albums = results[1] || [];
+      if (albums.albums) albums = albums.albums;
+      state.currentArtist = artist;
+
+      var hasImg = artist.image || artist.artwork;
+      var avatarContent = hasImg
+        ? '<img src="' + esc(artist.image || artist.artwork) + '" alt="">'
+        : esc(getInitials(artist.name));
+
+      var html = '<div class="artist-detail-header slide-up">';
+      html += '<div class="artist-detail-avatar">' + avatarContent + '</div>';
+      html += '<div class="artist-detail-info"><h1>' + esc(artist.name) + '</h1>';
+      html += '<div class="meta">' + albums.length + ' album' + (albums.length === 1 ? '' : 's') + '</div>';
+      html += '</div></div>';
+
+      if (albums.length > 0) {
+        html += '<h2 class="section-title">Albums</h2>';
+        html += '<div class="album-grid">';
+        albums.forEach(function (a, i) {
+          html += albumCardHTML(a, i);
+        });
+        html += '</div>';
+      } else {
+        html += emptyHTML('No albums for this artist.');
+      }
+
+      setView(html);
+    } catch (err) {
+      if (err.message !== 'unauthorized') setView(emptyHTML('Failed to load artist.'));
+    }
+  }
+
+  // Albums
+  async function renderAlbums() {
+    setView(spinnerHTML());
+    try {
+      var data = await api('/albums');
+      var albums = data || [];
+      if (data && data.albums) albums = data.albums;
+      state.albums = albums;
+
+      var html = '<div class="view-header"><h1>Albums</h1><p>' + albums.length + ' album' + (albums.length === 1 ? '' : 's') + '</p></div>';
+
+      if (albums.length === 0) {
+        html += emptyHTML('No albums found. Scan your library to discover music.');
+      } else {
+        html += '<div class="album-grid">';
+        albums.forEach(function (a, i) {
+          html += albumCardHTML(a, i);
+        });
+        html += '</div>';
+      }
+
+      setView(html);
+    } catch (err) {
+      if (err.message !== 'unauthorized') setView(emptyHTML('Failed to load albums.'));
+    }
+  }
+
+  // Album Detail
+  async function renderAlbumDetail(id) {
+    setView(spinnerHTML());
+    try {
+      var album = await api('/albums/' + encodeURIComponent(id));
+      album = album || {};
+      state.currentAlbum = album;
+      var tracks = album.tracks || [];
+      var totalDuration = tracks.reduce(function (sum, t) { return sum + (t.duration || 0); }, 0);
+
+      var art = album.artwork ? '<img src="' + esc(album.artwork) + '" alt="">' : '<div style="width:100%;height:100%;background:var(--elevated);display:flex;align-items:center;justify-content:center;color:var(--text-muted)"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg></div>';
+
+      var html = '<div class="album-detail-header slide-up">';
+      html += '<div class="album-detail-art">' + art + '</div>';
+      html += '<div class="album-detail-info">';
+      html += '<h1>' + esc(album.title || album.name) + '</h1>';
+      html += '<div class="album-detail-artist" data-action="go-artist" data-id="' + esc(album.artist_id || '') + '">' + esc(album.artist_name || album.artist || 'Unknown Artist') + '</div>';
+      html += '<div class="album-detail-meta">';
+      if (album.year) html += '<span>' + esc(album.year) + '</span>';
+      html += '<span>' + tracks.length + ' track' + (tracks.length === 1 ? '' : 's') + '</span>';
+      html += '<span>' + fmtDurationLong(totalDuration) + '</span>';
+      if (album.genre) html += '<span>' + esc(album.genre) + '</span>';
+      html += '</div>';
+      html += '<div class="album-play-all"><button class="btn-primary" data-action="play-album" data-id="' + esc(album.id) + '">Play All</button></div>';
+      html += '</div></div>';
+
+      // Track list
+      if (tracks.length > 0) {
+        html += '<div class="track-list">';
+        html += '<div class="track-list-header"><div>#</div><div>Title</div><div style="text-align:right">Duration</div></div>';
+        tracks.forEach(function (t, i) {
+          html += trackRowHTML(t, i, album.id, false, null, null);
+        });
+        html += '</div>';
+      }
+
+      setView(html);
+    } catch (err) {
+      if (err.message !== 'unauthorized') setView(emptyHTML('Failed to load album.'));
+    }
+  }
+
+  // Search
+  var searchDebounce = null;
+
+  function renderSearch() {
+    var html = '<div class="view-header"><h1>Search</h1></div>';
+    html += '<div class="search-input-wrap">';
+    html += '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+    html += '<input type="text" class="search-input" id="search-input" placeholder="Search tracks, albums, artists..." autofocus>';
+    html += '</div>';
+    html += '<div id="search-results"></div>';
+    setView(html);
+
+    var input = document.getElementById('search-input');
+    if (input) {
+      input.addEventListener('input', function () {
+        clearTimeout(searchDebounce);
+        var q = input.value.trim();
+        if (!q) {
+          document.getElementById('search-results').innerHTML = '';
+          return;
+        }
+        searchDebounce = setTimeout(function () {
+          doSearch(q);
+        }, 300);
+      });
+      input.focus();
+    }
+  }
+
+  async function doSearch(query) {
+    var container = document.getElementById('search-results');
+    if (!container) return;
+    container.innerHTML = spinnerHTML();
+    try {
+      var data = await api('/search?q=' + encodeURIComponent(query));
+      var tracks = data || [];
+      if (data && data.tracks) tracks = data.tracks;
+      if (data && data.results) tracks = data.results;
+
+      if (tracks.length === 0) {
+        container.innerHTML = emptyHTML('No results for "' + esc(query) + '"');
         return;
       }
 
-      let content = `
-        <button class="modal-close" data-action="close-modal"><svg viewBox="0 0 24 24" width="18" height="18">${svgX}</svg></button>
-        <div style="display:flex;gap:20px;align-items:flex-end;margin-bottom:24px">
-          <div style="width:120px;height:120px;border-radius:8px;overflow:hidden;background:var(--bg-hover);flex-shrink:0">
-            <img src="/api/artwork/album/${album.id}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none'">
-          </div>
-          <div>
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-muted);margin-bottom:4px">Remote Album</div>
-            <h2 style="font-size:22px;font-weight:700">${esc(album.title)}</h2>
-            <p style="color:var(--text-secondary);font-size:13px;margin-top:4px">${esc(album.artistName || 'Unknown')}${album.year ? ' &middot; ' + album.year : ''} &middot; ${album.trackCount || '?'} tracks</p>
-            <p style="color:var(--accent);font-size:12px;margin-top:6px">Streaming from ${esc(peerName || 'peer')}</p>
-          </div>
-        </div>
-        <p style="color:var(--text-secondary);font-size:13px">Track-level streaming from remote peers requires selecting tracks from the peer album view. Browse the peer library to stream individual tracks.</p>`;
-
-      $modalContent.innerHTML = content;
+      var html = '<div class="track-list">';
+      html += '<div class="track-list-header"><div>#</div><div>Title</div><div style="text-align:right">Duration</div></div>';
+      tracks.forEach(function (t, i) {
+        html += trackRowHTML(t, i, t.album_id || '', false, null, null);
+      });
+      html += '</div>';
+      container.innerHTML = html;
     } catch (err) {
-      $modalContent.innerHTML = `
-        <button class="modal-close" data-action="close-modal"><svg viewBox="0 0 24 24" width="18" height="18">${svgX}</svg></button>
-        ${emptyState(svgDisc, 'Error loading album', err.message)}`;
+      container.innerHTML = emptyHTML('Search failed: ' + err.message);
+    }
+  }
+
+  // Network
+  async function renderNetwork() {
+    setView(spinnerHTML());
+    try {
+      var results = await Promise.all([
+        api('/instance').catch(function () { return {}; }),
+        api('/peers').catch(function () { return []; })
+      ]);
+      var instance = results[0] || {};
+      var peers = results[1] || [];
+      if (peers.peers) peers = peers.peers;
+      state.instance = instance;
+      state.peers = peers;
+
+      var html = '<div class="view-header"><h1>Network</h1></div>';
+
+      // Instance info card
+      html += '<div class="instance-card"><h3>Your Instance</h3>';
+      html += '<dl class="meta-grid">';
+      html += '<dt>Name</dt><dd>' + esc(instance.name || 'Unnamed') + '</dd>';
+      html += '<dt>Instance ID</dt><dd>' + esc(instance.id || instance.instance_id || 'N/A') + '</dd>';
+      html += '<dt>Peer ID</dt><dd>' + esc(instance.peer_id || 'N/A') + '</dd>';
+      if (instance.addresses && instance.addresses.length) {
+        html += '<dt>Addresses</dt><dd>' + instance.addresses.map(esc).join('<br>') + '</dd>';
+      }
+      html += '</dl></div>';
+
+      // Follow new peer
+      html += '<h2 class="section-title">Peers</h2>';
+      html += '<div class="peer-follow-row">';
+      html += '<input type="text" class="peer-follow-input" id="peer-address-input" placeholder="Enter peer address to follow...">';
+      html += '<button class="btn-primary" data-action="follow-peer">Follow</button>';
+      html += '</div>';
+
+      // Peer list
+      if (peers.length === 0) {
+        html += emptyHTML('No peers followed yet.');
+      } else {
+        html += '<div class="peer-list">';
+        peers.forEach(function (p) {
+          var isActive = p.status === 'active' || p.status === 'online' || p.connected;
+          html += '<div class="peer-card">';
+          html += '<div class="peer-status ' + (isActive ? 'active' : 'inactive') + '"></div>';
+          html += '<div class="peer-info">';
+          html += '<div class="peer-name">' + esc(p.name || p.instance_name || 'Unknown Peer') + '</div>';
+          html += '<div class="peer-meta">' + esc(p.instance_id || p.id || '') + (p.last_synced ? ' &middot; Synced ' + esc(p.last_synced) : '') + '</div>';
+          html += '</div>';
+          html += '<div class="peer-actions">';
+          html += '<button class="btn-sm btn-sm-accent" data-action="browse-peer" data-id="' + esc(p.id) + '" data-name="' + esc(p.name || p.instance_name || 'Peer') + '">Browse</button>';
+          html += '<button class="btn-sm btn-sm-accent" data-action="sync-peer" data-id="' + esc(p.id) + '">Sync</button>';
+          html += '<button class="btn-sm btn-sm-ghost" data-action="unfollow-peer" data-id="' + esc(p.id) + '">Unfollow</button>';
+          html += '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+
+      setView(html);
+    } catch (err) {
+      if (err.message !== 'unauthorized') setView(emptyHTML('Failed to load network.'));
+    }
+  }
+
+  // Peer Browse Modal
+  async function openPeerBrowseModal(peerId, peerName) {
+    $modalContent.innerHTML = spinnerHTML();
+    $modalOverlay.hidden = false;
+    try {
+      var results = await Promise.all([
+        api('/peers/' + encodeURIComponent(peerId) + '/artists').catch(function () { return []; }),
+        api('/peers/' + encodeURIComponent(peerId) + '/albums').catch(function () { return []; })
+      ]);
+      var artists = results[0] || [];
+      var albums = results[1] || [];
+      if (artists.artists) artists = artists.artists;
+      if (albums.albums) albums = albums.albums;
+
+      var html = '<button class="modal-close" data-action="close-modal">&times;</button>';
+      html += '<h2 style="font-family:var(--font-heading);font-weight:700;margin-bottom:4px">' + esc(peerName) + '</h2>';
+      html += '<p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:24px">' + artists.length + ' artists &middot; ' + albums.length + ' albums</p>';
+
+      if (albums.length > 0) {
+        html += '<h3 class="section-title" style="font-size:1rem">Albums</h3>';
+        html += '<div class="album-grid" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:16px">';
+        albums.forEach(function (a, i) {
+          var art = a.artwork ? '<img src="' + esc(a.artwork) + '" alt="" loading="lazy">' : '<div style="width:100%;height:100%;background:var(--elevated);display:flex;align-items:center;justify-content:center;color:var(--text-muted)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg></div>';
+          html += '<div class="album-card slide-up ' + staggerClass(i) + '" data-action="browse-peer-album" data-album-id="' + esc(a.id) + '" data-peer-id="' + esc(peerId) + '" data-peer-name="' + esc(peerName) + '">';
+          html += '<div class="album-card-art" style="aspect-ratio:1;border-radius:6px;overflow:hidden;background:var(--elevated)">' + art + '</div>';
+          html += '<div class="album-card-title" style="margin-top:8px;font-size:0.82rem">' + esc(a.title || a.name) + '</div>';
+          html += '<div class="album-card-artist" style="font-size:0.75rem">' + esc(a.artist_name || a.artist || '') + '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+
+      if (artists.length > 0 && albums.length === 0) {
+        html += '<h3 class="section-title" style="font-size:1rem">Artists</h3>';
+        html += '<div class="artist-grid" style="grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:12px">';
+        artists.forEach(function (a, i) {
+          html += '<div class="artist-card slide-up ' + staggerClass(i) + '" style="cursor:default">';
+          html += '<div class="artist-avatar" style="width:64px;height:64px;font-size:1rem">' + esc(getInitials(a.name)) + '</div>';
+          html += '<div class="artist-card-name" style="font-size:0.8rem">' + esc(a.name) + '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+
+      if (albums.length === 0 && artists.length === 0) {
+        html += emptyHTML('This peer\'s library is empty.');
+      }
+
+      $modalContent.innerHTML = html;
+    } catch (err) {
+      $modalContent.innerHTML = '<button class="modal-close" data-action="close-modal">&times;</button>' + emptyHTML('Failed to browse peer: ' + err.message);
+    }
+  }
+
+  // Browse peer album (show tracks in modal)
+  async function openPeerAlbumModal(albumId, peerId, peerName) {
+    $modalContent.innerHTML = spinnerHTML();
+    $modalOverlay.hidden = false;
+    try {
+      var album = await api('/peers/' + encodeURIComponent(peerId) + '/albums/' + encodeURIComponent(albumId));
+      album = album || {};
+      var tracks = album.tracks || [];
+
+      var html = '<button class="modal-close" data-action="close-modal">&times;</button>';
+      html += '<h2 style="font-family:var(--font-heading);font-weight:700;margin-bottom:2px">' + esc(album.title || album.name) + '</h2>';
+      html += '<p style="color:var(--accent);font-size:0.9rem;margin-bottom:4px">' + esc(album.artist_name || album.artist || '') + '</p>';
+      html += '<p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:20px">From ' + esc(peerName) + ' &middot; ' + tracks.length + ' tracks</p>';
+
+      if (tracks.length > 0) {
+        html += '<div class="track-list">';
+        html += '<div class="track-list-header"><div>#</div><div>Title</div><div style="text-align:right">Duration</div></div>';
+        tracks.forEach(function (t, i) {
+          html += trackRowHTML(t, i, albumId, true, peerId, peerName);
+        });
+        html += '</div>';
+      }
+
+      $modalContent.innerHTML = html;
+    } catch (err) {
+      $modalContent.innerHTML = '<button class="modal-close" data-action="close-modal">&times;</button>' + emptyHTML('Failed to load album.');
     }
   }
 
   function closeModal() {
-    $modal.classList.add('hidden');
+    $modalOverlay.hidden = true;
     $modalContent.innerHTML = '';
   }
 
-  // ---- Components ----
-  function albumCard(album) {
-    return `
-      <div class="album-card" data-action="go-album" data-id="${album.id}">
-        <div class="album-card-art">
-          <img src="/api/artwork/album/${album.id}" alt="${esc(album.title)}" loading="lazy">
-          <div class="play-overlay">
-            <div class="play-overlay-btn"><svg viewBox="0 0 24 24">${svgPlay}</svg></div>
-          </div>
-        </div>
-        <div class="album-card-title">${esc(album.title)}</div>
-        <div class="album-card-artist">${esc(album.artistName || 'Unknown Artist')}</div>
-        ${album.year ? `<div class="album-card-year">${album.year}</div>` : ''}
-      </div>`;
-  }
-
-  function trackRow(track, index, album) {
-    const isPlaying = state.currentTrack && state.currentTrack.id === track.id;
-    return `
-      <div class="track-row${isPlaying ? ' playing' : ''}"
-           data-action="play-album-track" data-album-id="${album.id}" data-index="${index}">
-        <span class="track-num">
-          <span class="num-text">${track.trackNumber || index + 1}</span>
-          <div class="playing-indicator"><span></span><span></span><span></span></div>
-        </span>
-        <span class="track-title">${esc(track.title)}</span>
-        <span class="track-album-col">${esc(album.title)}</span>
-        <span class="track-duration">${fmtDuration(track.durationMs)}</span>
-      </div>`;
-  }
-
-  function highlightPlayingTrack() {
-    document.querySelectorAll('.track-row').forEach(row => {
-      const idx = parseInt(row.dataset.index);
-      const isPlaying = !isNaN(idx) && state.queue[idx] &&
-        state.currentTrack && state.queue[idx].track.id === state.currentTrack.id;
-      row.classList.toggle('playing', isPlaying);
-    });
+  // ---- Instance info in sidebar ----
+  async function loadInstanceInfo() {
+    try {
+      var inst = await api('/instance');
+      state.instance = inst || {};
+      $instanceInfo.innerHTML = '<strong>' + esc(inst.name || 'Napstarr') + '</strong><br>' +
+        '<span style="font-size:0.7rem;word-break:break-all">' + esc(inst.id || inst.instance_id || '') + '</span>';
+    } catch (_) {
+      $instanceInfo.innerHTML = '';
+    }
   }
 
   // ---- Player ----
+  function showPlayerBar() {
+    $playerBar.hidden = false;
+  }
+
   function playTrack(track, albumId, isRemote, peerId, peerName) {
+    if (!track) return;
+
     state.currentTrack = track;
     state.isRemote = !!isRemote;
     state.remotePeerId = peerId || null;
     state.remotePeerName = peerName || null;
 
+    // Build stream URL
+    var src;
     if (isRemote && peerId) {
-      audio.src = '/api/stream/remote/' + peerId + '/' + track.id;
+      src = '/api/stream/remote/' + encodeURIComponent(peerId) + '/' + encodeURIComponent(track.id);
     } else {
-      audio.src = '/api/stream/' + track.id;
+      src = '/api/stream/' + encodeURIComponent(track.id);
     }
-    audio.play().catch(err => {
-      console.warn('Play failed:', err);
-    });
 
-    // Update player UI
-    document.getElementById('player-title').textContent = track.title || 'Unknown';
-    document.getElementById('player-artist').textContent = track.artistName || 'Unknown Artist';
+    audio.src = src;
+    audio.play().catch(function () {});
 
-    // Album art
-    const artEl = document.getElementById('player-art');
-    const artAlbumId = albumId || track.albumId;
-    if (artAlbumId) {
-      artEl.innerHTML = `<img src="/api/artwork/album/${artAlbumId}" alt="" loading="lazy">`;
+    // Update UI
+    $playerTitle.textContent = track.title || track.name || 'Unknown';
+    $playerArtist.textContent = track.artist_name || track.artist || '';
+    if (track.artwork || track.album_artwork) {
+      $playerArt.src = track.artwork || track.album_artwork;
+      $playerArt.style.display = '';
+    } else {
+      $playerArt.src = '';
+      $playerArt.style.display = 'none';
     }
 
     // Remote badge
-    const badge = document.getElementById('player-remote-badge');
-    const nameSpan = document.getElementById('player-remote-name');
     if (isRemote && peerName) {
-      badge.classList.remove('hidden');
-      nameSpan.textContent = peerName;
+      $playerRemoteBadge.hidden = false;
+      $playerRemoteName.textContent = peerName;
     } else {
-      badge.classList.add('hidden');
+      $playerRemoteBadge.hidden = true;
     }
 
-    highlightPlayingTrack();
+    showPlayerBar();
+    updatePlayButton(true);
+
+    // Highlight current track in list
+    highlightCurrentTrack();
   }
 
-  function playQueue(queueItems, startIndex) {
-    if (!queueItems || !queueItems.length) return;
-    state.queue = queueItems;
+  function playQueue(items, startIndex) {
+    state.queue = items || [];
     state.queueIndex = startIndex || 0;
-    const item = state.queue[state.queueIndex];
+    if (state.queue.length === 0) return;
+    var item = state.queue[state.queueIndex];
     playTrack(item.track, item.albumId, item.isRemote, item.peerId, item.peerName);
   }
 
   function togglePlay() {
     if (!state.currentTrack) return;
-    if (audio.paused) audio.play().catch(() => {});
-    else audio.pause();
-  }
-
-  function nextTrack() {
-    if (state.queueIndex < state.queue.length - 1) {
-      state.queueIndex++;
-      const item = state.queue[state.queueIndex];
-      playTrack(item.track, item.albumId, item.isRemote, item.peerId, item.peerName);
+    if (audio.paused) {
+      audio.play().catch(function () {});
+    } else {
+      audio.pause();
     }
   }
 
+  function nextTrack() {
+    if (state.queue.length === 0) return;
+    state.queueIndex++;
+    if (state.queueIndex >= state.queue.length) {
+      state.queueIndex = 0;
+    }
+    var item = state.queue[state.queueIndex];
+    playTrack(item.track, item.albumId, item.isRemote, item.peerId, item.peerName);
+  }
+
   function prevTrack() {
+    if (state.queue.length === 0) return;
+    // If more than 3 seconds in, restart current track
     if (audio.currentTime > 3) {
       audio.currentTime = 0;
       return;
     }
-    if (state.queueIndex > 0) {
-      state.queueIndex--;
-      const item = state.queue[state.queueIndex];
-      playTrack(item.track, item.albumId, item.isRemote, item.peerId, item.peerName);
+    state.queueIndex--;
+    if (state.queueIndex < 0) {
+      state.queueIndex = state.queue.length - 1;
     }
+    var item = state.queue[state.queueIndex];
+    playTrack(item.track, item.albumId, item.isRemote, item.peerId, item.peerName);
   }
 
-  function updatePlayIcon() {
-    const icon = document.getElementById('play-icon');
-    if (!icon) return;
-    if (state.playing) {
-      icon.innerHTML = '<rect x="7" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="13" y="5" width="4" height="14" rx="1" fill="currentColor"/>';
+  function updatePlayButton(isPlaying) {
+    state.playing = isPlaying;
+    if (isPlaying) {
+      $playIcon.hidden = true;
+      $pauseIcon.hidden = false;
+      $playerBar.classList.add('playing');
     } else {
-      icon.innerHTML = svgPlay;
+      $playIcon.hidden = false;
+      $pauseIcon.hidden = true;
+      $playerBar.classList.remove('playing');
     }
   }
 
-  function recordListen() {
-    if (!state.currentTrack || state.isRemote) return;
-    const ms = Math.round(audio.currentTime * 1000);
-    if (ms < 5000) return;
-    api('/history', {
-      method: 'POST',
-      body: JSON.stringify({ trackId: state.currentTrack.id, durationMs: ms }),
-    }).catch(() => {});
+  function highlightCurrentTrack() {
+    document.querySelectorAll('.track-row').forEach(function (row) {
+      var tid = row.getAttribute('data-track-id');
+      row.classList.toggle('playing', state.currentTrack && tid === String(state.currentTrack.id));
+    });
   }
 
-  // Player event listeners
-  document.getElementById('btn-play').addEventListener('click', togglePlay);
-  document.getElementById('btn-prev').addEventListener('click', prevTrack);
-  document.getElementById('btn-next').addEventListener('click', nextTrack);
-
-  document.getElementById('volume-slider').addEventListener('input', (e) => {
-    state.volume = parseFloat(e.target.value);
-    audio.volume = state.volume;
-  });
-
-  document.getElementById('player-progress').addEventListener('click', (e) => {
+  // Audio events
+  audio.addEventListener('timeupdate', function () {
     if (!audio.duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    audio.currentTime = Math.max(0, Math.min(audio.duration, pct * audio.duration));
+    var pct = (audio.currentTime / audio.duration) * 100;
+    $playerProgressFill.style.width = pct + '%';
+    $playerTime.textContent = fmtDurationSec(audio.currentTime) + ' / ' + fmtDurationSec(audio.duration);
   });
 
-  audio.addEventListener('timeupdate', () => {
-    if (!audio.duration) return;
-    const pct = (audio.currentTime / audio.duration) * 100;
-    document.getElementById('player-progress-fill').style.width = pct + '%';
-    document.getElementById('player-current').textContent = fmtDuration(audio.currentTime * 1000);
-    document.getElementById('player-duration').textContent = fmtDuration(audio.duration * 1000);
-  });
+  audio.addEventListener('play', function () { updatePlayButton(true); });
+  audio.addEventListener('pause', function () { updatePlayButton(false); });
 
-  audio.addEventListener('play', () => { state.playing = true; updatePlayIcon(); });
-  audio.addEventListener('pause', () => { state.playing = false; updatePlayIcon(); });
-
-  audio.addEventListener('ended', () => {
-    recordListen();
+  audio.addEventListener('ended', function () {
+    updatePlayButton(false);
+    // Record listen history for local tracks played >5s
+    if (state.currentTrack && !state.isRemote && audio.currentTime > 5) {
+      api('/history', {
+        method: 'POST',
+        body: JSON.stringify({ track_id: state.currentTrack.id })
+      }).catch(function () {});
+    }
     nextTrack();
   });
 
-  // Handle stream errors — track file not accessible, skip to next
-  audio.addEventListener('error', () => {
-    console.warn('Stream error for track:', state.currentTrack?.title);
-    const titleEl = document.getElementById('player-title');
-    if (titleEl && state.currentTrack) {
-      titleEl.textContent = state.currentTrack.title + ' — unavailable';
-      titleEl.style.color = '#ef4444';
-      setTimeout(() => { titleEl.style.color = ''; }, 2000);
-    }
-    // Auto-skip to next track quickly
-    setTimeout(() => nextTrack(), 800);
+  audio.addEventListener('error', function () {
+    var savedTitle = $playerTitle.textContent;
+    $playerTitle.textContent = 'Unavailable';
+    setTimeout(function () {
+      $playerTitle.textContent = savedTitle;
+      nextTrack();
+    }, 800);
   });
 
-  // Show loading state while audio is buffering
-  audio.addEventListener('waiting', () => {
-    const titleEl = document.getElementById('player-title');
-    if (titleEl && state.currentTrack) {
-      titleEl.textContent = state.currentTrack.title + ' — loading...';
-    }
+  audio.addEventListener('waiting', function () {
+    var original = $playerTitle.textContent;
+    $playerTitle.setAttribute('data-original', original);
+    $playerTitle.textContent = 'Loading...';
   });
 
-  audio.addEventListener('canplay', () => {
-    const titleEl = document.getElementById('player-title');
-    if (titleEl && state.currentTrack) {
-      titleEl.textContent = state.currentTrack.title || 'Unknown';
+  audio.addEventListener('canplay', function () {
+    var original = $playerTitle.getAttribute('data-original');
+    if (original) {
+      $playerTitle.textContent = original;
+      $playerTitle.removeAttribute('data-original');
     }
   });
 
-  // ---- Global Click Delegation ----
-  document.addEventListener('click', (e) => {
-    const target = e.target.closest('[data-action]');
-    if (!target) return;
-
-    const action = target.dataset.action;
-
-    switch (action) {
-      case 'go-album':
-        e.preventDefault();
-        navigateTo('album-detail', { id: target.dataset.id });
-        break;
-
-      case 'go-artist':
-        e.preventDefault();
-        navigateTo('artist-detail', { id: target.dataset.id });
-        break;
-
-      case 'go-artists':
-        e.preventDefault();
-        navigateTo('artists');
-        break;
-
-      case 'go-albums':
-        e.preventDefault();
-        navigateTo('albums');
-        break;
-
-      case 'go-network':
-        e.preventDefault();
-        navigateTo('network');
-        break;
-
-      case 'play-album': {
-        e.preventDefault();
-        const albumId = target.dataset.id;
-        api('/albums/' + albumId).then(album => {
-          if (!album || !album.tracks) return;
-          const q = album.tracks.map(t => ({ track: t, albumId: album.id, isRemote: false }));
-          playQueue(q, 0);
-        }).catch(() => {});
-        break;
-      }
-
-      case 'shuffle-album': {
-        e.preventDefault();
-        const albumId = target.dataset.id;
-        api('/albums/' + albumId).then(album => {
-          if (!album || !album.tracks) return;
-          const shuffled = [...album.tracks].sort(() => Math.random() - 0.5);
-          const q = shuffled.map(t => ({ track: t, albumId: album.id, isRemote: false }));
-          playQueue(q, 0);
-        }).catch(() => {});
-        break;
-      }
-
-      case 'play-album-track': {
-        e.preventDefault();
-        const albumId = target.dataset.albumId;
-        const index = parseInt(target.dataset.index);
-        api('/albums/' + albumId).then(album => {
-          if (!album || !album.tracks) return;
-          const q = album.tracks.map(t => ({ track: t, albumId: album.id, isRemote: false }));
-          playQueue(q, index);
-        }).catch(() => {});
-        break;
-      }
-
-      case 'play-search-track': {
-        e.preventDefault();
-        const trackId = target.dataset.trackId;
-        const searchEl = document.getElementById('search-results');
-        const allTracks = searchEl?._searchTracks || [];
-        const idx = parseInt(target.dataset.index);
-        if (allTracks.length) {
-          const q = allTracks.map(t => ({ track: t, albumId: t.albumId, isRemote: false }));
-          playQueue(q, idx);
-        } else {
-          api('/tracks/' + trackId).then(track => {
-            if (!track) return;
-            playQueue([{ track, albumId: track.albumId, isRemote: false }], 0);
-          }).catch(() => {});
-        }
-        break;
-      }
-
-      case 'view-peer': {
-        e.preventDefault();
-        if (e.target.closest('[data-action="sync-peer"]') || e.target.closest('[data-action="unfollow-peer"]')) break;
-        const peerId = target.dataset.peerId;
-        const peerName = target.dataset.peerName;
-        showPeerLibrary(peerId, peerName);
-        break;
-      }
-
-      case 'view-remote-album': {
-        e.preventDefault();
-        const peerId = target.dataset.peerId;
-        const albumId = target.dataset.albumId;
-        const peerName = target.dataset.peerName;
-        showRemoteAlbum(peerId, albumId, peerName);
-        break;
-      }
-
-      case 'sync-peer': {
-        e.preventDefault();
-        e.stopPropagation();
-        const peerId = target.dataset.peerId;
-        api('/peers/' + peerId + '/sync', { method: 'POST' })
-          .then(() => toast('Sync triggered'))
-          .catch(err => toast('Sync error: ' + err.message));
-        break;
-      }
-
-      case 'unfollow-peer': {
-        e.preventDefault();
-        e.stopPropagation();
-        const peerId = target.dataset.peerId;
-        if (confirm('Unfollow this peer?')) {
-          api('/peers/' + peerId, { method: 'DELETE' })
-            .then(() => { toast('Peer unfollowed'); renderNetwork(); })
-            .catch(err => toast('Error: ' + err.message));
-        }
-        break;
-      }
-
-      case 'close-modal':
-        e.preventDefault();
-        closeModal();
-        break;
-    }
+  // Progress bar seek
+  $playerProgressWrap.addEventListener('click', function (e) {
+    if (!audio.duration) return;
+    var rect = $playerProgressWrap.getBoundingClientRect();
+    var pct = (e.clientX - rect.left) / rect.width;
+    audio.currentTime = pct * audio.duration;
   });
 
-  // Close modal on overlay click
-  $modal.addEventListener('click', (e) => {
-    if (e.target === $modal) closeModal();
+  // Volume slider
+  $volumeSlider.addEventListener('input', function () {
+    var v = parseFloat($volumeSlider.value);
+    audio.volume = v;
+    state.volume = v;
   });
 
-  // ---- Keyboard Shortcuts ----
-  document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-      if (e.key === 'Escape') e.target.blur();
-      return;
-    }
+  // Keyboard shortcuts
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
 
-    if (e.key === 'Escape' && !$modal.classList.contains('hidden')) {
-      closeModal();
-      return;
-    }
-
-    switch (e.key) {
-      case ' ':
+    switch (e.code) {
+      case 'Space':
         e.preventDefault();
         togglePlay();
         break;
-      case 'ArrowRight':
-        if (audio.duration) audio.currentTime = Math.min(audio.duration, audio.currentTime + 10);
-        break;
       case 'ArrowLeft':
-        audio.currentTime = Math.max(0, audio.currentTime - 10);
+        e.preventDefault();
+        if (audio.duration) audio.currentTime = Math.max(0, audio.currentTime - 10);
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        if (audio.duration) audio.currentTime = Math.min(audio.duration, audio.currentTime + 10);
         break;
       case 'ArrowUp':
         e.preventDefault();
         state.volume = Math.min(1, state.volume + 0.05);
         audio.volume = state.volume;
-        document.getElementById('volume-slider').value = state.volume;
+        $volumeSlider.value = state.volume;
         break;
       case 'ArrowDown':
         e.preventDefault();
         state.volume = Math.max(0, state.volume - 0.05);
         audio.volume = state.volume;
-        document.getElementById('volume-slider').value = state.volume;
+        $volumeSlider.value = state.volume;
         break;
     }
   });
 
+  // ---- Build queue from album tracks ----
+  function buildAlbumQueue(tracks, albumId, startIndex, isRemote, peerId, peerName) {
+    return tracks.map(function (t) {
+      return {
+        track: t,
+        albumId: albumId,
+        isRemote: !!isRemote,
+        peerId: peerId || null,
+        peerName: peerName || null
+      };
+    });
+  }
+
+  // ---- Play album by ID ----
+  async function playAlbumById(albumId) {
+    try {
+      var album = await api('/albums/' + encodeURIComponent(albumId));
+      album = album || {};
+      var tracks = album.tracks || [];
+      if (tracks.length === 0) {
+        toast('No tracks in this album', 'error');
+        return;
+      }
+      // Attach artwork to tracks
+      tracks.forEach(function (t) {
+        if (!t.artwork && !t.album_artwork) {
+          t.album_artwork = album.artwork || '';
+          t.artist_name = t.artist_name || album.artist_name || album.artist || '';
+        }
+      });
+      var queue = buildAlbumQueue(tracks, albumId, 0, false, null, null);
+      playQueue(queue, 0);
+    } catch (err) {
+      toast('Failed to play album', 'error');
+    }
+  }
+
+  // ---- Event Delegation ----
+  document.addEventListener('click', function (e) {
+    var target = e.target.closest('[data-action]');
+    if (!target) return;
+    var action = target.getAttribute('data-action');
+
+    switch (action) {
+      case 'go-album': {
+        var id = target.getAttribute('data-id');
+        if (id) location.hash = '#albums/' + id;
+        break;
+      }
+      case 'go-artist': {
+        var aid = target.getAttribute('data-id');
+        if (aid) location.hash = '#artists/' + aid;
+        break;
+      }
+      case 'play-album': {
+        e.stopPropagation();
+        var albumId = target.getAttribute('data-id');
+        if (albumId) playAlbumById(albumId);
+        break;
+      }
+      case 'play-track': {
+        var row = target.closest('.track-row');
+        if (!row) break;
+        var trackId = row.getAttribute('data-track-id');
+        var aId = row.getAttribute('data-album-id');
+        var idx = parseInt(row.getAttribute('data-index'), 10);
+        var remote = row.getAttribute('data-remote') === '1';
+        var pId = row.getAttribute('data-peer-id') || null;
+        var pName = row.getAttribute('data-peer-name') || null;
+
+        // Get all track rows in the same list
+        var list = row.parentElement;
+        var rows = list.querySelectorAll('.track-row');
+        var queue = [];
+        rows.forEach(function (r) {
+          var t = {
+            id: r.getAttribute('data-track-id'),
+            title: r.querySelector('.track-title').textContent,
+            duration: 0, // duration not critical for playback
+            album_id: r.getAttribute('data-album-id')
+          };
+          // Try to get artwork from current album
+          if (state.currentAlbum && state.currentAlbum.tracks) {
+            var found = state.currentAlbum.tracks.find(function (ct) { return String(ct.id) === String(t.id); });
+            if (found) {
+              t = Object.assign({}, found);
+              if (!t.artwork && !t.album_artwork) t.album_artwork = state.currentAlbum.artwork || '';
+              if (!t.artist_name) t.artist_name = state.currentAlbum.artist_name || state.currentAlbum.artist || '';
+            }
+          }
+          var isR = r.getAttribute('data-remote') === '1';
+          queue.push({
+            track: t,
+            albumId: r.getAttribute('data-album-id'),
+            isRemote: isR,
+            peerId: r.getAttribute('data-peer-id') || null,
+            peerName: r.getAttribute('data-peer-name') || null
+          });
+        });
+
+        playQueue(queue, idx);
+        break;
+      }
+      case 'play-single': {
+        var tid = target.getAttribute('data-track-id');
+        var track = { id: tid, title: target.getAttribute('data-title') || 'Track' };
+        playTrack(track, null, false, null, null);
+        break;
+      }
+      case 'toggle-play': {
+        togglePlay();
+        break;
+      }
+      case 'prev-track': {
+        prevTrack();
+        break;
+      }
+      case 'next-track': {
+        nextTrack();
+        break;
+      }
+      case 'scan-library': {
+        toast('Scanning library...', 'info');
+        api('/scan', { method: 'POST' }).then(function () {
+          toast('Library scan started', 'success');
+        }).catch(function (err) {
+          toast('Scan failed: ' + err.message, 'error');
+        });
+        break;
+      }
+      case 'enrich-metadata': {
+        toast('Enriching metadata...', 'info');
+        api('/enrich', { method: 'POST' }).then(function () {
+          toast('Metadata enrichment started', 'success');
+        }).catch(function (err) {
+          toast('Enrichment failed: ' + err.message, 'error');
+        });
+        break;
+      }
+      case 'follow-peer': {
+        var input = document.getElementById('peer-address-input');
+        if (!input) break;
+        var addr = input.value.trim();
+        if (!addr) { toast('Enter a peer address', 'error'); break; }
+        api('/peers', { method: 'POST', body: JSON.stringify({ address: addr }) }).then(function () {
+          toast('Peer followed', 'success');
+          input.value = '';
+          renderNetwork();
+        }).catch(function (err) {
+          toast('Failed to follow peer: ' + err.message, 'error');
+        });
+        break;
+      }
+      case 'unfollow-peer': {
+        var pid = target.getAttribute('data-id');
+        if (!pid) break;
+        api('/peers/' + encodeURIComponent(pid), { method: 'DELETE' }).then(function () {
+          toast('Peer unfollowed', 'success');
+          renderNetwork();
+        }).catch(function (err) {
+          toast('Failed to unfollow: ' + err.message, 'error');
+        });
+        break;
+      }
+      case 'sync-peer': {
+        var spid = target.getAttribute('data-id');
+        if (!spid) break;
+        toast('Syncing peer...', 'info');
+        api('/peers/' + encodeURIComponent(spid) + '/sync', { method: 'POST' }).then(function () {
+          toast('Sync started', 'success');
+        }).catch(function (err) {
+          toast('Sync failed: ' + err.message, 'error');
+        });
+        break;
+      }
+      case 'browse-peer': {
+        var bpid = target.getAttribute('data-id');
+        var bpname = target.getAttribute('data-name') || 'Peer';
+        if (bpid) openPeerBrowseModal(bpid, bpname);
+        break;
+      }
+      case 'browse-peer-album': {
+        var bAlbumId = target.closest('[data-album-id]').getAttribute('data-album-id');
+        var bPeerId = target.closest('[data-peer-id]').getAttribute('data-peer-id');
+        var bPeerName = target.closest('[data-peer-name]').getAttribute('data-peer-name') || 'Peer';
+        if (bAlbumId && bPeerId) openPeerAlbumModal(bAlbumId, bPeerId, bPeerName);
+        break;
+      }
+      case 'close-modal': {
+        closeModal();
+        break;
+      }
+    }
+  });
+
+  // Close modal on Escape
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !$modalOverlay.hidden) {
+      closeModal();
+    }
+  });
+
   // ---- Init ----
-  checkAuth();
+  async function init() {
+    // Try to check auth status
+    try {
+      var me = await api('/auth/me');
+      state.user = me || {};
+      showApp();
+      navigate(location.hash || '#home');
+      loadInstanceInfo();
+    } catch (_) {
+      showLogin();
+    }
+  }
+
+  init();
+
 })();
